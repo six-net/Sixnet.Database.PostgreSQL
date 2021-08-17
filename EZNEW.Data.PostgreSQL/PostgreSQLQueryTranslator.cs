@@ -2,19 +2,19 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
-using EZNEW.Develop.Command;
-using EZNEW.Develop.CQuery;
-using EZNEW.Develop.CQuery.CriteriaConverter;
-using EZNEW.Develop.CQuery.Translator;
-using EZNEW.Develop.Entity;
-using EZNEW.Fault;
+using EZNEW.Development.Command;
+using EZNEW.Development.Query;
+using EZNEW.Development.Query.CriteriaConverter;
+using EZNEW.Development.Query.Translator;
+using EZNEW.Development.Entity;
+using EZNEW.Exceptions;
 
 namespace EZNEW.Data.PostgreSQL
 {
     /// <summary>
     /// Query translator implement for the PostgreSQL
     /// </summary>
-    public class PostgreSQLQueryTranslator : IQueryTranslator
+    public class PostgreSqlQueryTranslator : IQueryTranslator
     {
         #region Fields
 
@@ -181,7 +181,7 @@ namespace EZNEW.Data.PostgreSQL
                                 string combineObjectName = DataManager.GetQueryRelationObjectName(DatabaseServerType.PostgreSQL, combine.CombineQuery);
                                 var combineQueryResult = ExecuteTranslate(combine.CombineQuery, parameters, combineObjectPetName, true, true);
                                 string combineConditionString = string.IsNullOrWhiteSpace(combineQueryResult.ConditionString) ? string.Empty : $"WHERE {combineQueryResult.ConditionString}";
-                                combineBuilder.Append($" {GetCombineOperator(combine.CombineType)} SELECT {string.Join(",", PostgreSQLFactory.FormatQueryFields(combineObjectPetName, query, query.GetEntityType(), true, false))} FROM {PostgreSQLFactory.WrapKeyword(combineObjectName)} AS {combineObjectPetName} {(combineQueryResult.AllowJoin ? combineQueryResult.JoinScript : string.Empty)} {combineConditionString}");
+                                combineBuilder.Append($" {GetCombineOperator(combine.CombineType)} SELECT {string.Join(",", PostgreSqlFactory.FormatQueryFields(combineObjectPetName, query, query.GetEntityType(), true, false))} FROM {PostgreSqlFactory.WrapKeyword(combineObjectName)} AS {combineObjectPetName} {(combineQueryResult.AllowJoin ? combineQueryResult.JoinScript : string.Empty)} {combineConditionString}");
                                 if (!combineQueryResult.WithScripts.IsNullOrEmpty())
                                 {
                                     withScripts.AddRange(combineQueryResult.WithScripts);
@@ -233,7 +233,7 @@ namespace EZNEW.Data.PostgreSQL
                             {
                                 conditionBuilder.Append($"{(conditionBuilder.Length == 0 ? string.Empty : " AND ")}{joinQueryResult.JoinExtraConditionString}");
                             }
-                            joinBuilder.Append($" {GetJoinOperator(joinItem.JoinType)} {PostgreSQLFactory.WrapKeyword(DataManager.GetQueryRelationObjectName(DatabaseServerType.PostgreSQL, joinItem.JoinQuery))} AS {joinObjName}{joinConnection}");
+                            joinBuilder.Append($" {GetJoinOperator(joinItem.JoinType)} {PostgreSqlFactory.WrapKeyword(DataManager.GetQueryRelationObjectName(DatabaseServerType.PostgreSQL, joinItem.JoinQuery))} AS {joinObjName}{joinConnection}");
                             if (joinItem.ExtraQuery != null)
                             {
                                 var extraQueryResult = ExecuteTranslate(joinItem.ExtraQuery, parameters, joinObjName, true, true);
@@ -251,7 +251,7 @@ namespace EZNEW.Data.PostgreSQL
                         {
                             var combineJoinObjName = GetNewSubObjectPetName();
                             var joinConnection = GetJoinCondition(query, joinItem, objectName, combineJoinObjName);
-                            joinBuilder.Append($" {GetJoinOperator(joinItem.JoinType)} (SELECT {string.Join(",", PostgreSQLFactory.FormatQueryFields(joinObjName, joinItem.JoinQuery, joinItem.JoinQuery.GetEntityType(), false, false))} FROM {PostgreSQLFactory.WrapKeyword(DataManager.GetQueryRelationObjectName(DatabaseServerType.PostgreSQL, joinItem.JoinQuery))} AS {joinObjName} {(joinQueryResult.AllowJoin ? joinQueryResult.JoinScript : string.Empty)} {(string.IsNullOrWhiteSpace(joinQueryResult.ConditionString) ? string.Empty : "WHERE " + joinQueryResult.ConditionString)} {joinQueryResult.CombineScript}) AS {combineJoinObjName}{joinConnection}");
+                            joinBuilder.Append($" {GetJoinOperator(joinItem.JoinType)} (SELECT {string.Join(",", PostgreSqlFactory.FormatQueryFields(joinObjName, joinItem.JoinQuery, joinItem.JoinQuery.GetEntityType(), false, false))} FROM {PostgreSqlFactory.WrapKeyword(DataManager.GetQueryRelationObjectName(DatabaseServerType.PostgreSQL, joinItem.JoinQuery))} AS {joinObjName} {(joinQueryResult.AllowJoin ? joinQueryResult.JoinScript : string.Empty)} {(string.IsNullOrWhiteSpace(joinQueryResult.ConditionString) ? string.Empty : "WHERE " + joinQueryResult.ConditionString)} {joinQueryResult.CombineScript}) AS {combineJoinObjName}{joinConnection}");
                         }
                         if (!joinQueryResult.WithScripts.IsNullOrEmpty())
                         {
@@ -283,12 +283,12 @@ namespace EZNEW.Data.PostgreSQL
                     var recurveTable = GetNewRecurveTableName();
                     recurveTablePetName = recurveTable.Item1;
                     recurveTableName = recurveTable.Item2;
-                    conditionString = $"{objectName}.{PostgreSQLFactory.WrapKeyword(recurveField.FieldName)} IN (SELECT {recurveTablePetName}.{PostgreSQLFactory.WrapKeyword(recurveField.FieldName)} FROM {recurveTableName} AS {recurveTablePetName})";
+                    conditionString = $"{objectName}.{PostgreSqlFactory.WrapKeyword(recurveField.FieldName)} IN (SELECT {recurveTablePetName}.{PostgreSqlFactory.WrapKeyword(recurveField.FieldName)} FROM {recurveTableName} AS {recurveTablePetName})";
                     string queryObjectName = DataManager.GetQueryRelationObjectName(DatabaseServerType.PostgreSQL, query);
                     string withScript =
-                    $"{recurveTableName} AS (SELECT {objectName}.{PostgreSQLFactory.WrapKeyword(recurveField.FieldName)},{objectName}.{PostgreSQLFactory.WrapKeyword(recurveRelationField.FieldName)} FROM {PostgreSQLFactory.WrapKeyword(queryObjectName)} AS {objectName} {joinScript} {(string.IsNullOrWhiteSpace(nowConditionString) ? string.Empty : $"WHERE {nowConditionString}")} " +
-                    $"UNION ALL SELECT {objectName}.{PostgreSQLFactory.WrapKeyword(recurveField.FieldName)},{objectName}.{PostgreSQLFactory.WrapKeyword(recurveRelationField.FieldName)} FROM {PostgreSQLFactory.WrapKeyword(queryObjectName)} AS {objectName} JOIN {recurveTableName} AS {recurveTablePetName} " +
-                    $"ON {(query.RecurveCriteria.Direction == RecurveDirection.Up ? $"{objectName}.{PostgreSQLFactory.WrapKeyword(recurveField.FieldName)}={recurveTablePetName}.{PostgreSQLFactory.WrapKeyword(recurveRelationField.FieldName)}" : $"{objectName}.{PostgreSQLFactory.WrapKeyword(recurveRelationField.FieldName)}={recurveTablePetName}.{PostgreSQLFactory.WrapKeyword(recurveField.FieldName)}")})";
+                    $"{recurveTableName} AS (SELECT {objectName}.{PostgreSqlFactory.WrapKeyword(recurveField.FieldName)},{objectName}.{PostgreSqlFactory.WrapKeyword(recurveRelationField.FieldName)} FROM {PostgreSqlFactory.WrapKeyword(queryObjectName)} AS {objectName} {joinScript} {(string.IsNullOrWhiteSpace(nowConditionString) ? string.Empty : $"WHERE {nowConditionString}")} " +
+                    $"UNION ALL SELECT {objectName}.{PostgreSqlFactory.WrapKeyword(recurveField.FieldName)},{objectName}.{PostgreSqlFactory.WrapKeyword(recurveRelationField.FieldName)} FROM {PostgreSqlFactory.WrapKeyword(queryObjectName)} AS {objectName} JOIN {recurveTableName} AS {recurveTablePetName} " +
+                    $"ON {(query.RecurveCriteria.Direction == RecurveDirection.Up ? $"{objectName}.{PostgreSqlFactory.WrapKeyword(recurveField.FieldName)}={recurveTablePetName}.{PostgreSqlFactory.WrapKeyword(recurveRelationField.FieldName)}" : $"{objectName}.{PostgreSqlFactory.WrapKeyword(recurveRelationField.FieldName)}={recurveTablePetName}.{PostgreSqlFactory.WrapKeyword(recurveField.FieldName)}")})";
                     withScripts.Add(withScript);
                 }
                 var result = TranslateResult.CreateNewResult(conditionString, orderBuilder.ToString().Trim(','), parameters);
@@ -407,14 +407,14 @@ namespace EZNEW.Data.PostgreSQL
                 if (subqueryLimitResult.Item1)
                 {
                     valueQueryCondition = string.IsNullOrWhiteSpace(subQueryResult.CombineScript)
-                        ? $"{criteriaFieldName} {sqlOperator} (SELECT {PostgreSQLFactory.WrapKeyword(valueQueryField.FieldName)} FROM (SELECT {subObjName}.{PostgreSQLFactory.WrapKeyword(valueQueryField.FieldName)} FROM {PostgreSQLFactory.WrapKeyword(valueQueryObjectName)} AS {subObjName} {(subQueryResult.AllowJoin ? subQueryResult.JoinScript : string.Empty)} {conditionString} {orderString} {topString}) AS S{subObjName})"
-                        : $"{criteriaFieldName} {sqlOperator} (SELECT {PostgreSQLFactory.WrapKeyword(valueQueryField.FieldName)} FROM (SELECT {subObjName}.{PostgreSQLFactory.WrapKeyword(valueQueryField.FieldName)} FROM (SELECT {string.Join(",", PostgreSQLFactory.FormatQueryFields(subObjName, valueQuery, valueQuery.GetEntityType(), true, false))} FROM {PostgreSQLFactory.WrapKeyword(valueQueryObjectName)} AS {subObjName} {(subQueryResult.AllowJoin ? subQueryResult.JoinScript : string.Empty)} {conditionString} {subQueryResult.CombineScript}) AS {subObjName} {orderString} {topString}) AS S{subObjName})";
+                        ? $"{criteriaFieldName} {sqlOperator} (SELECT {PostgreSqlFactory.WrapKeyword(valueQueryField.FieldName)} FROM (SELECT {subObjName}.{PostgreSqlFactory.WrapKeyword(valueQueryField.FieldName)} FROM {PostgreSqlFactory.WrapKeyword(valueQueryObjectName)} AS {subObjName} {(subQueryResult.AllowJoin ? subQueryResult.JoinScript : string.Empty)} {conditionString} {orderString} {topString}) AS S{subObjName})"
+                        : $"{criteriaFieldName} {sqlOperator} (SELECT {PostgreSqlFactory.WrapKeyword(valueQueryField.FieldName)} FROM (SELECT {subObjName}.{PostgreSqlFactory.WrapKeyword(valueQueryField.FieldName)} FROM (SELECT {string.Join(",", PostgreSqlFactory.FormatQueryFields(subObjName, valueQuery, valueQuery.GetEntityType(), true, false))} FROM {PostgreSqlFactory.WrapKeyword(valueQueryObjectName)} AS {subObjName} {(subQueryResult.AllowJoin ? subQueryResult.JoinScript : string.Empty)} {conditionString} {subQueryResult.CombineScript}) AS {subObjName} {orderString} {topString}) AS S{subObjName})";
                 }
                 else
                 {
                     valueQueryCondition = string.IsNullOrWhiteSpace(subQueryResult.CombineScript)
-                        ? $"{criteriaFieldName} {sqlOperator} (SELECT {subObjName}.{PostgreSQLFactory.WrapKeyword(valueQueryField.FieldName)} FROM {PostgreSQLFactory.WrapKeyword(valueQueryObjectName)} AS {subObjName} {(subQueryResult.AllowJoin ? subQueryResult.JoinScript : string.Empty)} {conditionString} {orderString} {topString})"
-                        : $"{criteriaFieldName} {sqlOperator} (SELECT {subObjName}.{PostgreSQLFactory.WrapKeyword(valueQueryField.FieldName)} FROM (SELECT {string.Join(",", PostgreSQLFactory.FormatQueryFields(subObjName, valueQuery, valueQuery.GetEntityType(), true, false))} FROM {PostgreSQLFactory.WrapKeyword(valueQueryObjectName)} AS {subObjName} {(subQueryResult.AllowJoin ? subQueryResult.JoinScript : string.Empty)} {conditionString} {subQueryResult.CombineScript}) AS {subObjName} {orderString} {topString})";
+                        ? $"{criteriaFieldName} {sqlOperator} (SELECT {subObjName}.{PostgreSqlFactory.WrapKeyword(valueQueryField.FieldName)} FROM {PostgreSqlFactory.WrapKeyword(valueQueryObjectName)} AS {subObjName} {(subQueryResult.AllowJoin ? subQueryResult.JoinScript : string.Empty)} {conditionString} {orderString} {topString})"
+                        : $"{criteriaFieldName} {sqlOperator} (SELECT {subObjName}.{PostgreSqlFactory.WrapKeyword(valueQueryField.FieldName)} FROM (SELECT {string.Join(",", PostgreSqlFactory.FormatQueryFields(subObjName, valueQuery, valueQuery.GetEntityType(), true, false))} FROM {PostgreSqlFactory.WrapKeyword(valueQueryObjectName)} AS {subObjName} {(subQueryResult.AllowJoin ? subQueryResult.JoinScript : string.Empty)} {conditionString} {subQueryResult.CombineScript}) AS {subObjName} {orderString} {topString})";
                 }
                 var valueQueryResult = TranslateResult.CreateNewResult(valueQueryCondition);
                 if (!subQueryResult.WithScripts.IsNullOrEmpty())
@@ -440,7 +440,7 @@ namespace EZNEW.Data.PostgreSQL
             else
             {
                 parameters.Add(parameterName, FormatCriteriaValue(criteria.Operator, criteria.GetCriteriaRealValue()));
-                var criteriaCondition = $"{criteriaFieldName} {sqlOperator} {PostgreSQLFactory.ParameterPrefix}{parameterName}";
+                var criteriaCondition = $"{criteriaFieldName} {sqlOperator} {PostgreSqlFactory.ParameterPrefix}{parameterName}";
                 return TranslateResult.CreateNewResult(criteriaCondition);
             }
         }
@@ -579,9 +579,9 @@ namespace EZNEW.Data.PostgreSQL
             fieldName = field.FieldName;
             if (convert == null)
             {
-                return $"{objectName}.{PostgreSQLFactory.WrapKeyword(fieldName)}";
+                return $"{objectName}.{PostgreSqlFactory.WrapKeyword(fieldName)}";
             }
-            return PostgreSQLFactory.ParseCriteriaConverter(convert, objectName, fieldName);
+            return PostgreSqlFactory.ParseCriteriaConverter(convert, objectName, fieldName);
         }
 
         /// <summary>
@@ -664,7 +664,7 @@ namespace EZNEW.Data.PostgreSQL
                 }
                 var sourceField = DataManager.GetField(DatabaseServerType.PostgreSQL, sourceEntityType, joinField.Key);
                 var targetField = DataManager.GetField(DatabaseServerType.PostgreSQL, targetEntityType, joinField.Value);
-                joinList.Add($" {sourceObjShortName}.{PostgreSQLFactory.WrapKeyword(useValueAsSource ? targetField.FieldName : sourceField.FieldName)}{GetJoinOperator(joinItem.Operator)}{targetObjShortName}.{PostgreSQLFactory.WrapKeyword(useValueAsSource ? sourceField.FieldName : targetField.FieldName)}");
+                joinList.Add($" {sourceObjShortName}.{PostgreSqlFactory.WrapKeyword(useValueAsSource ? targetField.FieldName : sourceField.FieldName)}{GetJoinOperator(joinItem.Operator)}{targetObjShortName}.{PostgreSqlFactory.WrapKeyword(useValueAsSource ? sourceField.FieldName : targetField.FieldName)}");
             }
             return joinList.IsNullOrEmpty() ? string.Empty : " ON" + string.Join(" AND", joinList);
         }
