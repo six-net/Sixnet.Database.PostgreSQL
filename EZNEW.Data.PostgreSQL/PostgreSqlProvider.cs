@@ -4,7 +4,7 @@ using System.Data;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
-using EZNEW.Dapper;
+using Dapper;
 using EZNEW.Development.Entity;
 using EZNEW.Development.Query;
 using EZNEW.Development.Query.Translator;
@@ -60,7 +60,7 @@ namespace EZNEW.Data.PostgreSQL
 
             IQueryTranslator translator = PostgreSqlFactory.GetQueryTranslator(server);
             List<DatabaseExecutionCommand> executeCommands = new List<DatabaseExecutionCommand>();
-            var batchExecuteConfig = DataManager.GetBatchExecuteConfiguration(server.ServerType) ?? BatchExecuteConfiguration.Default;
+            var batchExecuteConfig = DataManager.GetBatchExecutionConfiguration(server.ServerType) ?? BatchExecutionConfiguration.Default;
             var groupStatementsCount = batchExecuteConfig.GroupStatementsCount;
             groupStatementsCount = groupStatementsCount < 0 ? 1 : groupStatementsCount;
             var groupParameterCount = batchExecuteConfig.GroupParametersCount;
@@ -560,7 +560,7 @@ namespace EZNEW.Data.PostgreSQL
                     string innerFormatedField = string.Join(",", PostgreSqlFactory.FormatQueryFields(translator.ObjectPetName, queryFields, false));
                     string outputFormatedField = string.Join(",", PostgreSqlFactory.FormatQueryFields(translator.ObjectPetName, queryFields, true));
                     string queryScript = $"SELECT {innerFormatedField} FROM {PostgreSqlFactory.WrapKeyword(objectName)} AS {translator.ObjectPetName} {joinScript} {(string.IsNullOrWhiteSpace(tranResult.ConditionString) ? string.Empty : $"WHERE {tranResult.ConditionString}")} {tranResult.CombineScript}";
-                    cmdText = $"{(string.IsNullOrWhiteSpace(tranResult.PreScript) ? $"WITH {PostgreSqlFactory.PagingTableName} AS ({queryScript})" : $"{tranResult.PreScript},{PostgreSqlFactory.PagingTableName} AS ({queryScript})")}SELECT (SELECT COUNT({PostgreSqlFactory.WrapKeyword(defaultFieldName)}) FROM {PostgreSqlFactory.PagingTableName}) AS QueryDataTotalCount,{outputFormatedField} FROM {PostgreSqlFactory.PagingTableName} AS {translator.ObjectPetName} ORDER BY {(string.IsNullOrWhiteSpace(tranResult.OrderString) ? $"{translator.ObjectPetName}.{PostgreSqlFactory.WrapKeyword(defaultFieldName)} DESC" : $"{tranResult.OrderString}")} {limitString}";
+                    cmdText = $"{(string.IsNullOrWhiteSpace(tranResult.PreScript) ? $"WITH {PostgreSqlFactory.PagingTableName} AS ({queryScript})" : $"{tranResult.PreScript},{PostgreSqlFactory.PagingTableName} AS ({queryScript})")}SELECT (SELECT COUNT({PostgreSqlFactory.WrapKeyword(defaultFieldName)}) FROM {PostgreSqlFactory.PagingTableName}) AS {DataManager.PagingTotalCountFieldName},{outputFormatedField} FROM {PostgreSqlFactory.PagingTableName} AS {translator.ObjectPetName} ORDER BY {(string.IsNullOrWhiteSpace(tranResult.OrderString) ? $"{translator.ObjectPetName}.{PostgreSqlFactory.WrapKeyword(defaultFieldName)} DESC" : $"{tranResult.OrderString}")} {limitString}";
                     break;
             }
 

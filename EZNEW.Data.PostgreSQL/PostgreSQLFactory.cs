@@ -12,7 +12,7 @@ using EZNEW.Development.Command;
 using EZNEW.Development.Query;
 using EZNEW.Development.Entity;
 using EZNEW.Development.Command.Modification;
-using EZNEW.Dapper;
+using Dapper;
 using EZNEW.Development.DataAccess;
 using Npgsql;
 
