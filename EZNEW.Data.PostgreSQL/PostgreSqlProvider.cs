@@ -321,7 +321,19 @@ namespace EZNEW.Data.PostgreSQL
                 }
                 updateSetArray.Add($"{PostgreSqlFactory.WrapKeyword(field.FieldName)}={newValueExpression}");
             }
-            string cmdText = $"{preScript}UPDATE {PostgreSqlFactory.WrapKeyword(objectName)} AS {translator.ObjectPetName} {joinScript} SET {string.Join(",", updateSetArray)} {conditionString};";
+            string cmdText;
+            string wrapObjName = PostgreSqlFactory.WrapKeyword(objectName);
+            if (string.IsNullOrWhiteSpace(joinScript))
+            {
+                cmdText = $"{preScript}UPDATE {wrapObjName} AS {translator.ObjectPetName} SET {string.Join(",", updateSetArray)} {conditionString};";
+            }
+            else
+            {
+                string updateTableShortName = translator.ObjectPetName;
+                string updateJoinTableShortName = "UJTB";
+                var primaryKeyFormatedResult = FormatWrapJoinPrimaryKeys(command.EntityType, translator.ObjectPetName, updateTableShortName, updateJoinTableShortName);
+                cmdText = $"{preScript}UPDATE {wrapObjName} AS {updateTableShortName} SET {string.Join(",", updateSetArray)} FROM (SELECT {string.Join(",", primaryKeyFormatedResult.Item1)} FROM {wrapObjName} AS {translator.ObjectPetName} {joinScript} {conditionString}) AS {updateJoinTableShortName} WHERE {string.Join(" AND ", primaryKeyFormatedResult.Item2)};";
+            }
             translator.ParameterSequence = parameterSequence;
 
             #endregion
@@ -367,7 +379,19 @@ namespace EZNEW.Data.PostgreSQL
             #region script
 
             string objectName = DataManager.GetEntityObjectName(DatabaseServerType.PostgreSQL, command.EntityType, command.ObjectName);
-            string cmdText = $"{preScript}DELETE FROM {PostgreSqlFactory.WrapKeyword(objectName)} AS {translator.ObjectPetName} {joinScript} {conditionString};";
+            string cmdText;
+            string wrapObjectName = PostgreSqlFactory.WrapKeyword(objectName);
+            if (string.IsNullOrWhiteSpace(joinScript))
+            {
+                cmdText = $"{preScript}DELETE FROM {wrapObjectName} AS {translator.ObjectPetName} {conditionString};";
+            }
+            else
+            {
+                string deleteTableShortName = "DTB";
+                string deleteJoinTableShortName = "DJTB";
+                var primaryKeyFormatedResult = FormatWrapJoinPrimaryKeys(command.EntityType, translator.ObjectPetName, deleteTableShortName, deleteJoinTableShortName);
+                cmdText = $"{preScript}DELETE FROM {wrapObjectName} AS {deleteTableShortName} USING (SELECT {string.Join(",", primaryKeyFormatedResult.Item1)} FROM {wrapObjectName} AS {translator.ObjectPetName} {joinScript} {conditionString}) AS {deleteJoinTableShortName} WHERE {string.Join(" AND ", primaryKeyFormatedResult.Item2)};";
+            }
 
             #endregion
 
@@ -387,6 +411,31 @@ namespace EZNEW.Data.PostgreSQL
                 Parameters = parameters,
                 HasPreScript = !string.IsNullOrWhiteSpace(preScript)
             };
+        }
+
+        Tuple<IEnumerable<string>, IEnumerable<string>> FormatWrapJoinPrimaryKeys(Type entityType, string translatorObjName, string sourceObjName, string targetObjName)
+        {
+            var primaryKeyFields = DataManager.GetFields(DatabaseServerType.PostgreSQL, entityType, EntityManager.GetPrimaryKeys(entityType));
+            if (primaryKeyFields.IsNullOrEmpty())
+            {
+                throw new EZNEWException($"{entityType?.FullName} not set primary key");
+            }
+            return FormatWrapJoinFields(primaryKeyFields, translatorObjName, sourceObjName, targetObjName);
+        }
+
+        Tuple<IEnumerable<string>, IEnumerable<string>> FormatWrapJoinFields(IEnumerable<EntityField> fields, string translatorObjName, string sourceObjName, string targetObjName)
+        {
+            var joinItems = fields.Select(field =>
+            {
+                string fieldName = PostgreSqlFactory.WrapKeyword(field.FieldName);
+                return $"{sourceObjName}.{fieldName} = {targetObjName}.{fieldName}";
+            });
+            var queryItems = fields.Select(field =>
+            {
+                string fieldName = PostgreSqlFactory.WrapKeyword(field.FieldName);
+                return $"{translatorObjName}.{fieldName}";
+            });
+            return new Tuple<IEnumerable<string>, IEnumerable<string>>(queryItems, joinItems);
         }
 
         #endregion
