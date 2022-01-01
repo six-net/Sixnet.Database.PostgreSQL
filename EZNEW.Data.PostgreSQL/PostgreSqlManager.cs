@@ -2,33 +2,35 @@
 using System.Data;
 using System.Collections.Generic;
 using System.Linq;
-using EZNEW.Data.CriteriaConverter;
-using EZNEW.Development.Query.CriteriaConverter;
-using EZNEW.Development.Query.Translator;
-using EZNEW.Exceptions;
+using Dapper;
+using Npgsql;
+using EZNEW.Development.Query.Translation;
 using EZNEW.Logging;
-using EZNEW.Serialization;
 using EZNEW.Development.Command;
 using EZNEW.Development.Query;
 using EZNEW.Development.Entity;
-using EZNEW.Development.Command.Modification;
-using Dapper;
 using EZNEW.Development.DataAccess;
-using Npgsql;
+using EZNEW.Data.Conversion;
+using EZNEW.Exceptions;
 
 namespace EZNEW.Data.PostgreSQL
 {
     /// <summary>
-    /// Database server factory
+    /// Database postgresql manager
     /// </summary>
-    internal static class PostgreSqlFactory
+    internal static class PostgreSqlManager
     {
         #region Fields
 
         /// <summary>
+        /// Gets current database server type
+        /// </summary>
+        internal const DatabaseServerType CurrentDatabaseServerType = DatabaseServerType.PostgreSQL;
+
+        /// <summary>
         /// Field format key
         /// </summary>
-        internal static readonly string FieldFormatKey = ((int)DatabaseServerType.PostgreSQL).ToString();
+        internal static readonly string FieldFormatKey = ((int)CurrentDatabaseServerType).ToString();
 
         /// <summary>
         /// Parameter prefix
@@ -51,9 +53,9 @@ namespace EZNEW.Data.PostgreSQL
         internal const string PagingTableName = "EZNEW_TEMTABLE_PAGING";
 
         /// <summary>
-        /// Calculate operators
+        /// Calculation operators
         /// </summary>
-        static readonly Dictionary<CalculationOperator, string> CalculateOperators = new Dictionary<CalculationOperator, string>(4)
+        static readonly Dictionary<CalculationOperator, string> CalculationOperators = new Dictionary<CalculationOperator, string>(4)
         {
             [CalculationOperator.Add] = "+",
             [CalculationOperator.Subtract] = "-",
@@ -62,23 +64,33 @@ namespace EZNEW.Data.PostgreSQL
         };
 
         /// <summary>
-        /// Aggregate functions
+        /// Aggregation functions
         /// </summary>
-        static readonly Dictionary<CommandOperationType, string> AggregateFunctions = new Dictionary<CommandOperationType, string>(5)
+        static readonly Dictionary<CommandOperationType, string> AggregationFunctions = new Dictionary<CommandOperationType, string>(5)
         {
             [CommandOperationType.Max] = "MAX",
             [CommandOperationType.Min] = "MIN",
             [CommandOperationType.Sum] = "SUM",
             [CommandOperationType.Avg] = "AVG",
             [CommandOperationType.Count] = "COUNT",
-        }; 
+        };
+
+        /// <summary>
+        /// Default feild converter
+        /// </summary>
+        static readonly PostgreSqlDefaultFieldConverter DefaultFieldConverter = new PostgreSqlDefaultFieldConverter();
+
+        /// <summary>
+        /// Database provider type
+        /// </summary>
+        static readonly Type ProviderType = typeof(PostgreSqlProvider);
 
         #endregion
 
         #region Get database connection
 
         /// <summary>
-        /// Get mysql database connection
+        /// Get database connection
         /// </summary>
         /// <param name="server">Database server</param>
         /// <returns>Return database connection</returns>
@@ -94,59 +106,47 @@ namespace EZNEW.Data.PostgreSQL
         /// <summary>
         /// Get query translator
         /// </summary>
-        /// <param name="server">Database server</param>
-        /// <returns></returns>
-        internal static IQueryTranslator GetQueryTranslator(DatabaseServer server)
+        /// <param name="dataAccessContext">Data access context</param>
+        /// <returns>Return query translator</returns>
+        internal static IQueryTranslator GetQueryTranslator(DataAccessContext dataAccessContext)
         {
-            return DataManager.GetQueryTranslator(server.ServerType) ?? new PostgreSqlQueryTranslator();
+            if (dataAccessContext?.Server == null)
+            {
+                throw new ArgumentNullException($"{nameof(DataAccessContext.Server)}");
+            }
+            var translator = DataManager.GetQueryTranslator(dataAccessContext.Server.ServerType) ?? new PostgreSqlQueryTranslator();
+            translator.DataAccessContext = dataAccessContext;
+            return translator;
         }
 
         #endregion
 
-        #region Criteria converter
+        #region Field conversion
 
         /// <summary>
-        /// Parse criteria converter
+        /// Convert field
         /// </summary>
-        /// <param name="converter">converter</param>
-        /// <param name="objectName">object name</param>
-        /// <param name="fieldName">field name</param>
-        /// <returns></returns>
-        internal static string ParseCriteriaConverter(ICriteriaConverter converter, string objectName, string fieldName)
+        /// <param name="server">Database server</param>
+        /// <param name="conversionOptions">Field conversion options</param>
+        /// <param name="objectName">Object name</param>
+        /// <param name="fieldName">Field name</param>
+        /// <returns>Return field conversion result</returns>
+        internal static FieldConversionResult ConvertField(DatabaseServer server, FieldConversionOptions conversionOptions, string objectName, string fieldName)
         {
-            var criteriaConverterParse = DataManager.GetCriteriaConverterParser(converter?.Name) ?? Parse;
-            return criteriaConverterParse(new CriteriaConverterParseOptions()
+            if (string.IsNullOrWhiteSpace(conversionOptions?.ConversionName))
             {
-                CriteriaConverter = converter,
-                ServerType = DatabaseServerType.PostgreSQL,
+                return null;
+            }
+
+            IFieldConverter fieldConverter = DataManager.GetFieldConverter(conversionOptions.ConversionName) ?? DefaultFieldConverter;
+            return fieldConverter.Convert(new FieldConversionContext()
+            {
+                ConversionName = conversionOptions.ConversionName,
+                Parameter = conversionOptions.Parameter,
+                FieldName = fieldName,
                 ObjectName = objectName,
-                FieldName = fieldName
+                Server = server
             });
-        }
-
-        /// <summary>
-        /// Parse
-        /// </summary>
-        /// <param name="option">parse option</param>
-        /// <returns></returns>
-        static string Parse(CriteriaConverterParseOptions option)
-        {
-            if (string.IsNullOrWhiteSpace(option?.CriteriaConverter?.Name))
-            {
-                throw new EZNEWException("Criteria convert config name is null or empty");
-            }
-            string format = null;
-            switch (option.CriteriaConverter.Name)
-            {
-                case CriteriaConverterNames.StringLength:
-                    format = $"CHAR_LENGTH({option.ObjectName}.{WrapKeyword(option.FieldName)})";
-                    break;
-            }
-            if (string.IsNullOrWhiteSpace(format))
-            {
-                throw new EZNEWException($"Cann't resolve criteria convert:{option.CriteriaConverter.Name} for PostgreSQL");
-            }
-            return format;
         }
 
         #endregion
@@ -154,12 +154,12 @@ namespace EZNEW.Data.PostgreSQL
         #region Framework log
 
         /// <summary>
-        /// Log execute command
+        /// Log execution command
         /// </summary>
-        /// <param name="command">Execte command</param>
+        /// <param name="command">Exection command</param>
         internal static void LogExecutionCommand(DatabaseExecutionCommand command)
         {
-            FrameworkLogManager.LogDatabaseExecutionCommand(DatabaseServerType.PostgreSQL, command);
+            FrameworkLogManager.LogDatabaseExecutionCommand(ProviderType, CurrentDatabaseServerType, command);
         }
 
         /// <summary>
@@ -169,7 +169,7 @@ namespace EZNEW.Data.PostgreSQL
         /// <param name="parameter">Parameter</param>
         internal static void LogScript(string script, object parameter)
         {
-            FrameworkLogManager.LogDatabaseScript(DatabaseServerType.PostgreSQL, script, parameter);
+            FrameworkLogManager.LogDatabaseScript(ProviderType, CurrentDatabaseServerType, script, parameter);
         }
 
         #endregion
@@ -183,73 +183,74 @@ namespace EZNEW.Data.PostgreSQL
         /// <returns>Return command type</returns>
         public static CommandType GetCommandType(DefaultCommand command)
         {
-            return command.CommandType == CommandTextType.Procedure ? CommandType.StoredProcedure : CommandType.Text;
+            return command.TextType == CommandTextType.Procedure ? CommandType.StoredProcedure : CommandType.Text;
         }
 
         #endregion
 
-        #region Get calculate sign
+        #region Get system calculation operator
 
         /// <summary>
-        /// Get calculate sign
+        /// Get system calculation operator
         /// </summary>
-        /// <param name="calculate">Calculate operator</param>
-        /// <returns></returns>
-        public static string GetCalculateChar(CalculationOperator calculate)
+        /// <param name="calculationOperator">Calculation operator</param>
+        /// <returns>Return system calculation operator</returns>
+        public static string GetSystemCalculationOperator(CalculationOperator calculationOperator)
         {
-            CalculateOperators.TryGetValue(calculate, out var opearterChar);
-            return opearterChar;
+            CalculationOperators.TryGetValue(calculationOperator, out var systemCalculationOperator);
+            return systemCalculationOperator;
         }
 
         #endregion
 
-        #region Get aggregate function name
+        #region Get aggregation function name
 
         /// <summary>
-        /// Get aggregate function name
+        /// Get aggregation function name
         /// </summary>
-        /// <param name="funcType">Function type</param>
-        /// <returns></returns>
-        public static string GetAggregateFunctionName(CommandOperationType funcType)
+        /// <param name="commandOperationType">Command operation type</param>
+        /// <returns>Return aggregation function name</returns>
+        public static string GetAggregateFunctionName(CommandOperationType commandOperationType)
         {
-            AggregateFunctions.TryGetValue(funcType, out var funcName);
+            AggregationFunctions.TryGetValue(commandOperationType, out var funcName);
             return funcName;
         }
 
         #endregion
 
-        #region Aggregate operate must need field
+        #region Check aggregation operation whether must need field
 
         /// <summary>
-        /// Aggregate operate must need field
+        /// Check aggregation operation whether must need field
         /// </summary>
-        /// <param name="operateType">Operate type</param>
-        /// <returns></returns>
-        public static bool AggregateOperateMustNeedField(CommandOperationType operateType)
+        /// <param name="operationType">Operation type</param>
+        /// <returns>Whether must need field</returns>
+        public static bool AggregateOperateMustNeedField(CommandOperationType operationType)
         {
-            return operateType != CommandOperationType.Count;
+            return operationType != CommandOperationType.Count;
         }
 
         #endregion
 
-        #region Format insert fields
+        #region Format insertion fields
 
         /// <summary>
-        /// Format insert fields
+        /// Format insertion fields
         /// </summary>
+        /// <param name="entityType">Entity type</param>
         /// <param name="fields">Fields</param>
-        /// <param name="parameters">Origin parameters</param>
+        /// <param name="parameters">Parameters</param>
         /// <param name="parameterSequence">Parameter sequence</param>
-        /// <returns>first:fields,second:parameter fields,third:parameters</returns>
-        public static Tuple<List<string>, List<string>, CommandParameters> FormatInsertFields(int fieldCount, IEnumerable<EntityField> fields, object parameters, int parameterSequence)
+        /// <returns>First:fields,Second:parameter fields,Third:parameters</returns>
+        public static Tuple<List<string>, List<string>, CommandParameters> FormatInsertionFields(Type entityType, int fieldCount, IEnumerable<EntityField> fields, object parameters, int parameterSequence)
         {
             if (fields.IsNullOrEmpty())
             {
-                return null;
+                throw new EZNEWException($"Entity type {entityType?.Name} not set fields for insertion.");
             }
             List<string> formatFields = new List<string>(fieldCount);
             List<string> parameterFields = new List<string>(fieldCount);
-            CommandParameters cmdParameters = ParseParameters(parameters);
+            CommandParameters cmdParameters = ConvertParameter(parameters);
             foreach (var field in fields)
             {
                 formatFields.Add(WrapKeyword(field.FieldName));
@@ -270,30 +271,34 @@ namespace EZNEW.Data.PostgreSQL
         #region Format fields
 
         /// <summary>
-        /// Format fields
+        /// Format query fields
         /// </summary>
-        /// <param name="fields">Fields</param>
+        /// <param name="objectPetName">Object pet name</param>
+        /// <param name="query">Query</param>
+        /// <param name="entityType">Entity type</param>
+        /// <param name="forceNecessaryFields">Whether force include necessary fields</param>
+        /// <param name="conversionFieldName">Indicates whether conversion field name</param>
         /// <returns></returns>
-        public static IEnumerable<string> FormatQueryFields(string databasePetName, IQuery query, Type entityType, bool forceMustFields, bool convertField)
+        public static IEnumerable<string> FormatQueryFields(string objectPetName, IQuery query, Type entityType, bool forceNecessaryFields, bool conversionFieldName)
         {
             if (query == null || entityType == null)
             {
                 return Array.Empty<string>();
             }
-            var queryFields = GetQueryFields(query, entityType, forceMustFields);
-            return queryFields?.Select(field => FormatField(databasePetName, field, convertField)) ?? Array.Empty<string>();
+            var queryFields = GetQueryFields(query, entityType, forceNecessaryFields);
+            return queryFields?.Select(field => FormatField(objectPetName, field, conversionFieldName)) ?? Array.Empty<string>();
         }
 
         /// <summary>
         /// Format query fields
         /// </summary>
-        /// <param name="databasePetName">Database name</param>
+        /// <param name="objectPetName">Object pet name</param>
         /// <param name="fields">Fields</param>
-        /// <param name="convertField">Whether convert field</param>
+        /// <param name="conversionFieldName">Indicates whether conversion field name</param>
         /// <returns></returns>
-        public static IEnumerable<string> FormatQueryFields(string databasePetName, IEnumerable<EntityField> fields, bool convertField)
+        public static IEnumerable<string> FormatQueryFields(string objectPetName, IEnumerable<EntityField> fields, bool conversionFieldName)
         {
-            return fields?.Select(field => FormatField(databasePetName, field, convertField)) ?? Array.Empty<string>();
+            return fields?.Select(field => FormatField(objectPetName, field, conversionFieldName)) ?? Array.Empty<string>();
         }
 
         #endregion
@@ -303,21 +308,22 @@ namespace EZNEW.Data.PostgreSQL
         /// <summary>
         /// Format field
         /// </summary>
-        /// <param name="dataBaseObjectName">Database object name</param>
-        /// <param name="field">field</param>
+        /// <param name="objectPetName">Object pet name</param>
+        /// <param name="field">Field</param>
+        /// <param name="conversionFieldName">Indicates whether conversion field name</param>
         /// <returns></returns>
-        public static string FormatField(string dataBaseObjectName, EntityField field, bool convertField)
+        public static string FormatField(string objectPetName, EntityField field, bool conversionFieldName)
         {
             if (field == null)
             {
                 return string.Empty;
             }
-            var formatValue = $"{dataBaseObjectName}.{WrapKeyword(field.FieldName)}";
+            var formatValue = $"{objectPetName}.{WrapKeyword(field.FieldName)}";
             if (!string.IsNullOrWhiteSpace(field.QueryFormat))
             {
                 formatValue = string.Format(field.QueryFormat + " AS {1}", formatValue, WrapKeyword(field.PropertyName));
             }
-            else if (field.FieldName != field.PropertyName && convertField)
+            else if (field.FieldName != field.PropertyName && conversionFieldName)
             {
                 formatValue = $"{formatValue} AS {WrapKeyword(field.PropertyName)}";
             }
@@ -347,11 +353,11 @@ namespace EZNEW.Data.PostgreSQL
         /// </summary>
         /// <param name="query">Query</param>
         /// <param name="entityType">Entity type</param>
-        /// <param name="forceMustFields">Whether return must query fields</param>
+        /// <param name="forceNecessaryFields">Whether include necessary fields</param>
         /// <returns></returns>
-        public static IEnumerable<EntityField> GetQueryFields(IQuery query, Type entityType, bool forceMustFields)
+        public static IEnumerable<EntityField> GetQueryFields(IQuery query, Type entityType, bool forceNecessaryFields)
         {
-            return DataManager.GetQueryFields(DatabaseServerType.PostgreSQL, entityType, query, forceMustFields);
+            return DataManager.GetQueryFields(CurrentDatabaseServerType, entityType, query, forceNecessaryFields);
         }
 
         /// <summary>
@@ -362,7 +368,7 @@ namespace EZNEW.Data.PostgreSQL
         /// <returns></returns>
         public static IEnumerable<EntityField> GetFields(Type entityType, IEnumerable<string> propertyNames)
         {
-            return DataManager.GetFields(DatabaseServerType.PostgreSQL, entityType, propertyNames);
+            return DataManager.GetFields(CurrentDatabaseServerType, entityType, propertyNames);
         }
 
         #endregion
@@ -380,7 +386,7 @@ namespace EZNEW.Data.PostgreSQL
             {
                 return string.Empty;
             }
-            return DataManager.GetDefaultField(DatabaseServerType.PostgreSQL, entityType)?.FieldName ?? string.Empty;
+            return DataManager.GetDefaultField(CurrentDatabaseServerType, entityType)?.FieldName ?? string.Empty;
         }
 
         #endregion
@@ -400,46 +406,16 @@ namespace EZNEW.Data.PostgreSQL
 
         #endregion
 
-        #region Parse parameter
+        #region Convert parameter
 
         /// <summary>
-        /// Parse parameter
+        /// Convert parameter
         /// </summary>
-        /// <param name="originalParameters">Original parameter</param>
+        /// <param name="originalParameter">Original parameter</param>
         /// <returns></returns>
-        public static CommandParameters ParseParameters(object originalParameters)
+        public static CommandParameters ConvertParameter(object originalParameter)
         {
-            if (originalParameters == null)
-            {
-                return null;
-            }
-            if (originalParameters is CommandParameters commandParameters)
-            {
-                return commandParameters;
-            }
-            commandParameters = new CommandParameters();
-            if (originalParameters is IEnumerable<KeyValuePair<string, string>> stringParametersDict)
-            {
-                commandParameters.Add(stringParametersDict);
-            }
-            else if (originalParameters is IEnumerable<KeyValuePair<string, dynamic>> dynamicParametersDict)
-            {
-                commandParameters.Add(dynamicParametersDict);
-            }
-            else if (originalParameters is IEnumerable<KeyValuePair<string, object>> objectParametersDict)
-            {
-                commandParameters.Add(objectParametersDict);
-            }
-            else if (originalParameters is IEnumerable<KeyValuePair<string, IModificationValue>> modifyParametersDict)
-            {
-                commandParameters.Add(modifyParametersDict);
-            }
-            else
-            {
-                objectParametersDict = originalParameters.ObjectToDcitionary();
-                commandParameters.Add(objectParametersDict);
-            }
-            return commandParameters;
+            return CommandParameters.Parse(originalParameter);
         }
 
         #endregion
@@ -453,20 +429,7 @@ namespace EZNEW.Data.PostgreSQL
         /// <returns></returns>
         public static DynamicParameters ConvertCmdParameters(CommandParameters commandParameters)
         {
-            if (commandParameters?.Parameters.IsNullOrEmpty() ?? true)
-            {
-                return null;
-            }
-            DynamicParameters dynamicParameters = new DynamicParameters();
-            foreach (var item in commandParameters.Parameters)
-            {
-                var parameter = DataManager.HandleParameter(DatabaseServerType.PostgreSQL, item.Value);
-                dynamicParameters.Add(parameter.Name, parameter.Value
-                                    , parameter.DbType, parameter.ParameterDirection
-                                    , parameter.Size, parameter.Precision
-                                    , parameter.Scale);
-            }
-            return dynamicParameters;
+            return commandParameters?.ConvertToDynamicParameters(CurrentDatabaseServerType);
         }
 
         #endregion
@@ -482,7 +445,7 @@ namespace EZNEW.Data.PostgreSQL
         {
             if (!dataIsolationLevel.HasValue)
             {
-                dataIsolationLevel = DataManager.GetDataIsolationLevel(DatabaseServerType.PostgreSQL);
+                dataIsolationLevel = DataManager.GetDataIsolationLevel(CurrentDatabaseServerType);
             }
             return DataManager.GetSystemIsolationLevel(dataIsolationLevel);
         }
@@ -502,7 +465,7 @@ namespace EZNEW.Data.PostgreSQL
             DataIsolationLevel? dataIsolationLevel = query?.IsolationLevel;
             if (!dataIsolationLevel.HasValue)
             {
-                dataIsolationLevel = DataManager.GetDataIsolationLevel(DatabaseServerType.PostgreSQL);
+                dataIsolationLevel = DataManager.GetDataIsolationLevel(CurrentDatabaseServerType);
             }
             var systemIsolationLevel = GetTransactionIsolationLevel(dataIsolationLevel);
             if (systemIsolationLevel.HasValue)
@@ -518,20 +481,20 @@ namespace EZNEW.Data.PostgreSQL
 
         #endregion
 
-        #region Get execute transaction
+        #region Get execution transaction
 
         /// <summary>
-        /// Get execute transaction
+        /// Get execution transaction
         /// </summary>
         /// <param name="connection">Database connection</param>
-        /// <param name="executeOption">Execute option</param>
+        /// <param name="executionOptions">Execution options</param>
         /// <returns></returns>
-        public static IDbTransaction GetExecuteTransaction(IDbConnection connection, CommandExecutionOptions executeOption)
+        public static IDbTransaction GetExecutionTransaction(IDbConnection connection, CommandExecutionOptions executionOptions)
         {
-            DataIsolationLevel? dataIsolationLevel = executeOption?.IsolationLevel;
+            DataIsolationLevel? dataIsolationLevel = executionOptions?.IsolationLevel;
             if (!dataIsolationLevel.HasValue)
             {
-                dataIsolationLevel = DataManager.GetDataIsolationLevel(DatabaseServerType.PostgreSQL);
+                dataIsolationLevel = DataManager.GetDataIsolationLevel(CurrentDatabaseServerType);
             }
             var systemIsolationLevel = DataManager.GetSystemIsolationLevel(dataIsolationLevel);
             if (connection.State != ConnectionState.Open)

@@ -5,65 +5,80 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using Dapper;
+using Npgsql;
 using EZNEW.Development.Entity;
 using EZNEW.Development.Query;
-using EZNEW.Development.Query.Translator;
+using EZNEW.Development.Query.Translation;
 using EZNEW.Development.Command;
-using EZNEW.Development.Command.Modification;
 using EZNEW.Exceptions;
 using EZNEW.Data.Configuration;
-using Npgsql;
+using EZNEW.Data.Modification;
 
 namespace EZNEW.Data.PostgreSQL
 {
     /// <summary>
     /// Imeplements database provider for the PostgreSQL
     /// </summary>
-    public class PostgreSQLProvider : IDatabaseProvider
+    public class PostgreSqlProvider : IDatabaseProvider
     {
+        const DatabaseServerType CurrentDatabaseServerType = PostgreSqlManager.CurrentDatabaseServerType;
+
         #region Execute
 
         /// <summary>
         /// Execute command
         /// </summary>
         /// <param name="server">Database server</param>
-        /// <param name="executeOptions">Execute options</param>
+        /// <param name="executionOptions">Execution options</param>
         /// <param name="commands">Commands</param>
         /// <returns>Return the affected data numbers</returns>
-        public int Execute(DatabaseServer server, CommandExecutionOptions executeOptions, IEnumerable<ICommand> commands)
+        public int Execute(DatabaseServer server, CommandExecutionOptions executionOptions, IEnumerable<ICommand> commands)
         {
-            return ExecuteAsync(server, executeOptions, commands).Result;
+            return ExecuteAsync(server, executionOptions, commands).Result;
         }
 
         /// <summary>
         /// Execute command
         /// </summary>
         /// <param name="server">Database server</param>
-        /// <param name="executeOptions">Execute options</param>
+        /// <param name="executionOptions">Execution options</param>
         /// <param name="commands">Commands</param>
         /// <returns>Return the affected data numbers</returns>
-        public int Execute(DatabaseServer server, CommandExecutionOptions executeOptions, params ICommand[] commands)
+        public int Execute(DatabaseServer server, CommandExecutionOptions executionOptions, params ICommand[] commands)
         {
-            return ExecuteAsync(server, executeOptions, commands).Result;
+            return ExecuteAsync(server, executionOptions, commands).Result;
         }
 
         /// <summary>
         /// Execute command
         /// </summary>
         /// <param name="server">Database server</param>
-        /// <param name="executeOptions">Execute options</param>
+        /// <param name="executionOptions">Execution options</param>
         /// <param name="commands">Commands</param>
         /// <returns>Return the affected data numbers</returns>
-        public async Task<int> ExecuteAsync(DatabaseServer server, CommandExecutionOptions executeOptions, IEnumerable<ICommand> commands)
+        public async Task<int> ExecuteAsync(DatabaseServer server, CommandExecutionOptions executionOptions, params ICommand[] commands)
         {
-            #region group execute commands
+            IEnumerable<ICommand> cmdCollection = commands;
+            return await ExecuteAsync(server, executionOptions, cmdCollection).ConfigureAwait(false);
+        }
 
-            IQueryTranslator translator = PostgreSqlFactory.GetQueryTranslator(server);
-            List<DatabaseExecutionCommand> executeCommands = new List<DatabaseExecutionCommand>();
-            var batchExecuteConfig = DataManager.GetBatchExecutionConfiguration(server.ServerType) ?? BatchExecutionConfiguration.Default;
-            var groupStatementsCount = batchExecuteConfig.GroupStatementsCount;
+        /// <summary>
+        /// Execute command
+        /// </summary>
+        /// <param name="server">Database server</param>
+        /// <param name="executionOptions">Execution options</param>
+        /// <param name="commands">Commands</param>
+        /// <returns>Return the affected data numbers</returns>
+        public async Task<int> ExecuteAsync(DatabaseServer server, CommandExecutionOptions executionOptions, IEnumerable<ICommand> commands)
+        {
+            #region group execution commands
+
+            IQueryTranslator translator = PostgreSqlManager.GetQueryTranslator(DataAccessContext.Create(server));
+            List<DatabaseExecutionCommand> databaseExecutionCommands = new List<DatabaseExecutionCommand>();
+            var batchExecutionConfig = DataManager.GetBatchExecutionConfiguration(server.ServerType) ?? BatchExecutionConfiguration.Default;
+            var groupStatementsCount = batchExecutionConfig.GroupStatementsCount;
             groupStatementsCount = groupStatementsCount < 0 ? 1 : groupStatementsCount;
-            var groupParameterCount = batchExecuteConfig.GroupParametersCount;
+            var groupParameterCount = batchExecutionConfig.GroupParametersCount;
             groupParameterCount = groupParameterCount < 0 ? 1 : groupParameterCount;
             StringBuilder commandTextBuilder = new StringBuilder();
             CommandParameters parameters = null;
@@ -73,11 +88,11 @@ namespace EZNEW.Data.PostgreSQL
 
             DatabaseExecutionCommand GetGroupExecuteCommand()
             {
-                var executeCommand = new DatabaseExecutionCommand()
+                var executionCommand = new DatabaseExecutionCommand()
                 {
                     CommandText = commandTextBuilder.ToString(),
                     CommandType = CommandType.Text,
-                    ForceReturnValue = forceReturnValue,
+                    MustAffectedData = forceReturnValue,
                     Parameters = parameters
                 };
                 statementsCount = 0;
@@ -85,87 +100,75 @@ namespace EZNEW.Data.PostgreSQL
                 commandTextBuilder.Clear();
                 parameters = null;
                 forceReturnValue = false;
-                return executeCommand;
+                return executionCommand;
             }
 
             foreach (var cmd in commands)
             {
-                DatabaseExecutionCommand executeCommand = GetExecuteDbCommand(translator, cmd as DefaultCommand);
-                if (executeCommand == null)
+                DatabaseExecutionCommand databaseExecutionCommand = GetDatabaseExecutionCommand(translator, cmd as DefaultCommand);
+                if (databaseExecutionCommand == null)
                 {
                     continue;
                 }
 
                 //Trace log
-                PostgreSqlFactory.LogExecutionCommand(executeCommand);
+                PostgreSqlManager.LogExecutionCommand(databaseExecutionCommand);
 
                 cmdCount++;
-                if (executeCommand.PerformAlone)
+                if (databaseExecutionCommand.PerformAlone)
                 {
                     if (statementsCount > 0)
                     {
-                        executeCommands.Add(GetGroupExecuteCommand());
+                        databaseExecutionCommands.Add(GetGroupExecuteCommand());
                     }
-                    executeCommands.Add(executeCommand);
+                    databaseExecutionCommands.Add(databaseExecutionCommand);
                     continue;
                 }
-                commandTextBuilder.AppendLine(executeCommand.CommandText);
-                parameters = parameters == null ? executeCommand.Parameters : parameters.Union(executeCommand.Parameters);
-                forceReturnValue |= executeCommand.ForceReturnValue;
+                commandTextBuilder.AppendLine(databaseExecutionCommand.CommandText);
+                parameters = parameters == null ? databaseExecutionCommand.Parameters : parameters.Union(databaseExecutionCommand.Parameters);
+                forceReturnValue |= databaseExecutionCommand.MustAffectedData;
                 statementsCount++;
                 if (translator.ParameterSequence >= groupParameterCount || statementsCount >= groupStatementsCount)
                 {
-                    executeCommands.Add(GetGroupExecuteCommand());
+                    databaseExecutionCommands.Add(GetGroupExecuteCommand());
                 }
             }
             if (statementsCount > 0)
             {
-                executeCommands.Add(GetGroupExecuteCommand());
+                databaseExecutionCommands.Add(GetGroupExecuteCommand());
             }
 
             #endregion
 
-            return await ExecuteCommandAsync(server, executeOptions, executeCommands, executeOptions?.ExecuteByTransaction ?? cmdCount > 1).ConfigureAwait(false);
+            return await ExecuteDatabaseCommandAsync(server, executionOptions, databaseExecutionCommands, executionOptions?.ExecutionByTransaction ?? cmdCount > 1).ConfigureAwait(false);
         }
 
         /// <summary>
-        /// Execute command
+        /// Execute database command
         /// </summary>
         /// <param name="server">Database server</param>
-        /// <param name="executeOptions">Execute options</param>
-        /// <param name="commands">Commands</param>
-        /// <returns>Return the affected data numbers</returns>
-        public async Task<int> ExecuteAsync(DatabaseServer server, CommandExecutionOptions executeOptions, params ICommand[] commands)
-        {
-            IEnumerable<ICommand> cmdCollection = commands;
-            return await ExecuteAsync(server, executeOptions, cmdCollection).ConfigureAwait(false);
-        }
-
-        /// <summary>
-        /// Execute commands
-        /// </summary>
-        /// <param name="server">Database server</param>
-        /// <param name="executeCommands">Execute commands</param>
-        /// <param name="useTransaction">Use transaction</param>
-        /// <returns>Return the affected data numbers</returns>
-        async Task<int> ExecuteCommandAsync(DatabaseServer server, CommandExecutionOptions executeOptions, IEnumerable<DatabaseExecutionCommand> executeCommands, bool useTransaction)
+        /// <param name="executionOptions">Execution options</param>
+        /// <param name="databaseExecutionCommands">Database execution commands</param>
+        /// <param name="useTransaction">Whether use transaction</param>
+        /// <returns>Return affected data number</returns>
+        async Task<int> ExecuteDatabaseCommandAsync(DatabaseServer server, CommandExecutionOptions executionOptions, IEnumerable<DatabaseExecutionCommand> databaseExecutionCommands, bool useTransaction)
         {
             int resultValue = 0;
             bool success = true;
-            using (var conn = PostgreSqlFactory.GetConnection(server))
+            using (var conn = PostgreSqlManager.GetConnection(server))
             {
                 IDbTransaction transaction = null;
                 if (useTransaction)
                 {
-                    transaction = PostgreSqlFactory.GetExecuteTransaction(conn, executeOptions);
+                    transaction = PostgreSqlManager.GetExecutionTransaction(conn, executionOptions);
                 }
                 try
                 {
-                    foreach (var cmd in executeCommands)
+                    foreach (var cmd in databaseExecutionCommands)
                     {
-                        var cmdDefinition = new CommandDefinition(cmd.CommandText, PostgreSqlFactory.ConvertCmdParameters(cmd.Parameters), transaction: transaction, commandType: cmd.CommandType, cancellationToken: executeOptions?.CancellationToken ?? default);
+                        var cmdDefinition = new CommandDefinition(cmd.CommandText, PostgreSqlManager.ConvertCmdParameters(cmd.Parameters), transaction: transaction, commandType: cmd.CommandType, cancellationToken: executionOptions?.CancellationToken ?? default);
                         var executeResultValue = await conn.ExecuteAsync(cmdDefinition).ConfigureAwait(false);
-                        success = success && (cmd.ForceReturnValue ? executeResultValue > 0 : true);
+                        success = success && (cmd.MustAffectedData ? executeResultValue > 0 : true);
                         resultValue += executeResultValue;
                         if (useTransaction && !success)
                         {
@@ -197,20 +200,21 @@ namespace EZNEW.Data.PostgreSQL
         }
 
         /// <summary>
-        /// Get execute database execute command
+        /// Get database execution command
         /// </summary>
+        /// <param name="queryTranslator">Query translator</param>
         /// <param name="command">Command</param>
-        /// <returns>Return execute command</returns>
-        DatabaseExecutionCommand GetExecuteDbCommand(IQueryTranslator queryTranslator, DefaultCommand command)
+        /// <returns>Return a database execution command</returns>
+        DatabaseExecutionCommand GetDatabaseExecutionCommand(IQueryTranslator queryTranslator, DefaultCommand command)
         {
             DatabaseExecutionCommand GetTextCommand()
             {
                 return new DatabaseExecutionCommand()
                 {
-                    CommandText = command.CommandText,
-                    Parameters = PostgreSqlFactory.ParseParameters(command.Parameters),
-                    CommandType = PostgreSqlFactory.GetCommandType(command),
-                    ForceReturnValue = command.MustReturnValueOnSuccess,
+                    CommandText = command.Text,
+                    Parameters = PostgreSqlManager.ConvertParameter(command.Parameters),
+                    CommandType = PostgreSqlManager.GetCommandType(command),
+                    MustAffectedData = command.MustAffectedData,
                     HasPreScript = true
                 };
             }
@@ -218,63 +222,70 @@ namespace EZNEW.Data.PostgreSQL
             {
                 return GetTextCommand();
             }
-            DatabaseExecutionCommand executeCommand;
-            switch (command.OperateType)
+            DatabaseExecutionCommand executionCommand;
+            switch (command.OperationType)
             {
                 case CommandOperationType.Insert:
-                    executeCommand = GetInsertExecuteDbCommand(queryTranslator, command);
+                    executionCommand = GetDatabaseInsertionCommand(queryTranslator, command);
                     break;
                 case CommandOperationType.Update:
-                    executeCommand = GetUpdateExecuteDbCommand(queryTranslator, command);
+                    executionCommand = GetDatabaseUpdateCommand(queryTranslator, command);
                     break;
                 case CommandOperationType.Delete:
-                    executeCommand = GetDeleteExecuteDbCommand(queryTranslator, command);
+                    executionCommand = GetDatabaseDeletionCommand(queryTranslator, command);
                     break;
                 default:
-                    executeCommand = GetTextCommand();
+                    executionCommand = GetTextCommand();
                     break;
             }
-            return executeCommand;
+            return executionCommand;
         }
 
         /// <summary>
-        /// Get insert execute DbCommand
+        /// Get database insertion execution command
         /// </summary>
-        /// <param name="translator">Translator</param>
+        /// <param name="translator">Query translator</param>
         /// <param name="command">Command</param>
-        /// <returns>Return insert execute command</returns>
-        DatabaseExecutionCommand GetInsertExecuteDbCommand(IQueryTranslator translator, DefaultCommand command)
+        /// <returns>Return a database insertion command</returns>
+        DatabaseExecutionCommand GetDatabaseInsertionCommand(IQueryTranslator translator, DefaultCommand command)
         {
-            string objectName = DataManager.GetEntityObjectName(DatabaseServerType.PostgreSQL, command.EntityType, command.ObjectName);
-            var fields = DataManager.GetEditFields(DatabaseServerType.PostgreSQL, command.EntityType);
+            translator.DataAccessContext.SetCommand(command);
+            string objectName = translator.DataAccessContext.GetCommandEntityObjectName(command);
+            var fields = DataManager.GetEditFields(CurrentDatabaseServerType, command.EntityType);
             var fieldCount = fields.GetCount();
-            var insertFormatResult = PostgreSqlFactory.FormatInsertFields(fieldCount, fields, command.Parameters, translator.ParameterSequence);
+            var insertFormatResult = PostgreSqlManager.FormatInsertionFields(command.EntityType, fieldCount, fields, command.Parameters, translator.ParameterSequence);
             if (insertFormatResult == null)
             {
                 return null;
             }
-            string cmdText = $"INSERT INTO {PostgreSqlFactory.WrapKeyword(objectName)} ({string.Join(",", insertFormatResult.Item1)}) VALUES ({string.Join(",", insertFormatResult.Item2)});";
+            string cmdText = $"INSERT INTO {PostgreSqlManager.WrapKeyword(objectName)} ({string.Join(",", insertFormatResult.Item1)}) VALUES ({string.Join(",", insertFormatResult.Item2)});";
             CommandParameters parameters = insertFormatResult.Item3;
             translator.ParameterSequence += fieldCount;
             return new DatabaseExecutionCommand()
             {
                 CommandText = cmdText,
-                CommandType = PostgreSqlFactory.GetCommandType(command),
-                ForceReturnValue = command.MustReturnValueOnSuccess,
+                CommandType = PostgreSqlManager.GetCommandType(command),
+                MustAffectedData = command.MustAffectedData,
                 Parameters = parameters
             };
         }
 
         /// <summary>
-        /// Get update execute command
+        /// Get database update command
         /// </summary>
-        /// <param name="translator">Translator</param>
+        /// <param name="translator">Query translator</param>
         /// <param name="command">Command</param>
-        /// <returns>Return update execute command</returns>
-        DatabaseExecutionCommand GetUpdateExecuteDbCommand(IQueryTranslator translator, DefaultCommand command)
+        /// <returns>Return a database update command</returns>
+        DatabaseExecutionCommand GetDatabaseUpdateCommand(IQueryTranslator translator, DefaultCommand command)
         {
-            #region query translate
+            if (command?.Fields.IsNullOrEmpty() ?? true)
+            {
+                throw new EZNEWException($"No fields are set to update");
+            }
 
+            #region query translation
+
+            translator.DataAccessContext.SetCommand(command);
             var tranResult = translator.Translate(command.Query);
             string conditionString = string.Empty;
             if (!string.IsNullOrWhiteSpace(tranResult.ConditionString))
@@ -288,9 +299,9 @@ namespace EZNEW.Data.PostgreSQL
 
             #region script 
 
-            CommandParameters parameters = PostgreSqlFactory.ParseParameters(command.Parameters) ?? new CommandParameters();
-            string objectName = DataManager.GetEntityObjectName(DatabaseServerType.PostgreSQL, command.EntityType, command.ObjectName);
-            var fields = PostgreSqlFactory.GetFields(command.EntityType, command.Fields);
+            CommandParameters parameters = PostgreSqlManager.ConvertParameter(command.Parameters) ?? new CommandParameters();
+            string objectName = translator.DataAccessContext.GetCommandEntityObjectName(command);
+            var fields = PostgreSqlManager.GetFields(command.EntityType, command.Fields);
             int parameterSequence = translator.ParameterSequence;
             List<string> updateSetArray = new List<string>();
             foreach (var field in fields)
@@ -301,7 +312,7 @@ namespace EZNEW.Data.PostgreSQL
                 if (parameterValue != null)
                 {
                     parameterSequence++;
-                    parameterName = PostgreSqlFactory.FormatParameterName(parameterName, parameterSequence);
+                    parameterName = PostgreSqlManager.FormatParameterName(parameterName, parameterSequence);
                     parameters.Rename(field.PropertyName, parameterName);
                     if (parameterValue is IModificationValue)
                     {
@@ -310,19 +321,19 @@ namespace EZNEW.Data.PostgreSQL
                         if (parameterValue is CalculationModificationValue)
                         {
                             var calculateModifyValue = parameterValue as CalculationModificationValue;
-                            string calChar = PostgreSqlFactory.GetCalculateChar(calculateModifyValue.Operator);
-                            newValueExpression = $"{translator.ObjectPetName}.{PostgreSqlFactory.WrapKeyword(field.FieldName)}{calChar}{PostgreSqlFactory.ParameterPrefix}{parameterName}";
+                            string calChar = PostgreSqlManager.GetSystemCalculationOperator(calculateModifyValue.Operator);
+                            newValueExpression = $"{translator.ObjectPetName}.{PostgreSqlManager.WrapKeyword(field.FieldName)}{calChar}{PostgreSqlManager.ParameterPrefix}{parameterName}";
                         }
                     }
                 }
                 if (string.IsNullOrWhiteSpace(newValueExpression))
                 {
-                    newValueExpression = $"{PostgreSqlFactory.ParameterPrefix}{parameterName}";
+                    newValueExpression = $"{PostgreSqlManager.ParameterPrefix}{parameterName}";
                 }
-                updateSetArray.Add($"{PostgreSqlFactory.WrapKeyword(field.FieldName)}={newValueExpression}");
+                updateSetArray.Add($"{PostgreSqlManager.WrapKeyword(field.FieldName)}={newValueExpression}");
             }
             string cmdText;
-            string wrapObjName = PostgreSqlFactory.WrapKeyword(objectName);
+            string wrapObjName = PostgreSqlManager.WrapKeyword(objectName);
             if (string.IsNullOrWhiteSpace(joinScript))
             {
                 cmdText = $"{preScript}UPDATE {wrapObjName} AS {translator.ObjectPetName} SET {string.Join(",", updateSetArray)} {conditionString};";
@@ -340,7 +351,7 @@ namespace EZNEW.Data.PostgreSQL
 
             #region parameter
 
-            var queryParameters = PostgreSqlFactory.ParseParameters(tranResult.Parameters);
+            var queryParameters = PostgreSqlManager.ConvertParameter(tranResult.Parameters);
             parameters.Union(queryParameters);
 
             #endregion
@@ -348,22 +359,24 @@ namespace EZNEW.Data.PostgreSQL
             return new DatabaseExecutionCommand()
             {
                 CommandText = cmdText,
-                CommandType = PostgreSqlFactory.GetCommandType(command),
-                ForceReturnValue = command.MustReturnValueOnSuccess,
+                CommandType = PostgreSqlManager.GetCommandType(command),
+                MustAffectedData = command.MustAffectedData,
                 Parameters = parameters,
                 HasPreScript = !string.IsNullOrWhiteSpace(preScript)
             };
         }
 
         /// <summary>
-        /// Get delete execute command
+        /// Get database deletion command
         /// </summary>
-        /// <param name="translator">Translator</param>
+        /// <param name="translator">Query translator</param>
         /// <param name="command">Command</param>
-        /// <returns>Return delete execute command</returns>
-        DatabaseExecutionCommand GetDeleteExecuteDbCommand(IQueryTranslator translator, DefaultCommand command)
+        /// <returns>Return a database deletion command</returns>
+        DatabaseExecutionCommand GetDatabaseDeletionCommand(IQueryTranslator translator, DefaultCommand command)
         {
-            #region query translate
+            translator.DataAccessContext.SetCommand(command);
+
+            #region query translation
 
             var tranResult = translator.Translate(command.Query);
             string conditionString = string.Empty;
@@ -378,9 +391,9 @@ namespace EZNEW.Data.PostgreSQL
 
             #region script
 
-            string objectName = DataManager.GetEntityObjectName(DatabaseServerType.PostgreSQL, command.EntityType, command.ObjectName);
+            string objectName = translator.DataAccessContext.GetCommandEntityObjectName(command);
             string cmdText;
-            string wrapObjectName = PostgreSqlFactory.WrapKeyword(objectName);
+            string wrapObjectName = PostgreSqlManager.WrapKeyword(objectName);
             if (string.IsNullOrWhiteSpace(joinScript))
             {
                 cmdText = $"{preScript}DELETE FROM {wrapObjectName} AS {translator.ObjectPetName} {conditionString};";
@@ -397,8 +410,8 @@ namespace EZNEW.Data.PostgreSQL
 
             #region parameter
 
-            CommandParameters parameters = PostgreSqlFactory.ParseParameters(command.Parameters) ?? new CommandParameters();
-            var queryParameters = PostgreSqlFactory.ParseParameters(tranResult.Parameters);
+            CommandParameters parameters = PostgreSqlManager.ConvertParameter(command.Parameters) ?? new CommandParameters();
+            var queryParameters = PostgreSqlManager.ConvertParameter(tranResult.Parameters);
             parameters.Union(queryParameters);
 
             #endregion
@@ -406,34 +419,34 @@ namespace EZNEW.Data.PostgreSQL
             return new DatabaseExecutionCommand()
             {
                 CommandText = cmdText,
-                CommandType = PostgreSqlFactory.GetCommandType(command),
-                ForceReturnValue = command.MustReturnValueOnSuccess,
+                CommandType = PostgreSqlManager.GetCommandType(command),
+                MustAffectedData = command.MustAffectedData,
                 Parameters = parameters,
                 HasPreScript = !string.IsNullOrWhiteSpace(preScript)
             };
         }
 
-        Tuple<IEnumerable<string>, IEnumerable<string>> FormatWrapJoinPrimaryKeys(Type entityType, string translatorObjName, string sourceObjName, string targetObjName)
+        Tuple<IEnumerable<string>, IEnumerable<string>> FormatWrapJoinPrimaryKeys(Type entityType, string translatorObjectPetName, string sourceObjectPetName, string targetObjectPetName)
         {
-            var primaryKeyFields = DataManager.GetFields(DatabaseServerType.PostgreSQL, entityType, EntityManager.GetPrimaryKeys(entityType));
+            var primaryKeyFields = DataManager.GetFields(CurrentDatabaseServerType, entityType, EntityManager.GetPrimaryKeys(entityType));
             if (primaryKeyFields.IsNullOrEmpty())
             {
                 throw new EZNEWException($"{entityType?.FullName} not set primary key");
             }
-            return FormatWrapJoinFields(primaryKeyFields, translatorObjName, sourceObjName, targetObjName);
+            return FormatWrapJoinFields(primaryKeyFields, translatorObjectPetName, sourceObjectPetName, targetObjectPetName);
         }
 
-        Tuple<IEnumerable<string>, IEnumerable<string>> FormatWrapJoinFields(IEnumerable<EntityField> fields, string translatorObjName, string sourceObjName, string targetObjName)
+        Tuple<IEnumerable<string>, IEnumerable<string>> FormatWrapJoinFields(IEnumerable<EntityField> fields, string translatorObjectPetName, string sourceObjectPetName, string targetObjectPetName)
         {
             var joinItems = fields.Select(field =>
             {
-                string fieldName = PostgreSqlFactory.WrapKeyword(field.FieldName);
-                return $"{sourceObjName}.{fieldName} = {targetObjName}.{fieldName}";
+                string fieldName = PostgreSqlManager.WrapKeyword(field.FieldName);
+                return $"{sourceObjectPetName}.{fieldName} = {targetObjectPetName}.{fieldName}";
             });
             var queryItems = fields.Select(field =>
             {
-                string fieldName = PostgreSqlFactory.WrapKeyword(field.FieldName);
-                return $"{translatorObjName}.{fieldName}";
+                string fieldName = PostgreSqlManager.WrapKeyword(field.FieldName);
+                return $"{translatorObjectPetName}.{fieldName}";
             });
             return new Tuple<IEnumerable<string>, IEnumerable<string>>(queryItems, joinItems);
         }
@@ -465,12 +478,12 @@ namespace EZNEW.Data.PostgreSQL
         {
             if (command.Query == null)
             {
-                throw new EZNEWException("ICommand.Query is null");
+                throw new EZNEWException($"{nameof(ICommand.Query)} is null");
             }
 
-            #region query translate
+            #region query translation
 
-            IQueryTranslator translator = PostgreSqlFactory.GetQueryTranslator(server);
+            IQueryTranslator translator = PostgreSqlManager.GetQueryTranslator(DataAccessContext.Create(server, command));
             var tranResult = translator.Translate(command.Query);
             string joinScript = tranResult.AllowJoin ? tranResult.JoinScript : string.Empty;
 
@@ -479,26 +492,26 @@ namespace EZNEW.Data.PostgreSQL
             #region script
 
             string cmdText;
-            switch (command.Query.QueryType)
+            switch (command.Query.ExecutionMode)
             {
-                case QueryCommandType.Text:
+                case QueryExecutionMode.Text:
                     cmdText = tranResult.ConditionString;
                     break;
-                case QueryCommandType.QueryObject:
+                case QueryExecutionMode.QueryObject:
                 default:
                     int size = command.Query.QuerySize;
-                    string objectName = DataManager.GetEntityObjectName(DatabaseServerType.PostgreSQL, command.EntityType, command.ObjectName);
-                    string orderString = string.IsNullOrWhiteSpace(tranResult.OrderString) ? string.Empty : $"ORDER BY {tranResult.OrderString}";
-                    var queryFields = PostgreSqlFactory.GetQueryFields(command.Query, command.EntityType, true);
-                    string outputFormatedField = string.Join(",", PostgreSqlFactory.FormatQueryFields(translator.ObjectPetName, queryFields, true));
+                    string objectName = translator.DataAccessContext.GetCommandEntityObjectName(command);
+                    string sortString = string.IsNullOrWhiteSpace(tranResult.SortString) ? string.Empty : $"ORDER BY {tranResult.SortString}";
+                    var queryFields = PostgreSqlManager.GetQueryFields(command.Query, command.EntityType, true);
+                    string outputFormatedField = string.Join(",", PostgreSqlManager.FormatQueryFields(translator.ObjectPetName, queryFields, true));
                     if (string.IsNullOrWhiteSpace(tranResult.CombineScript))
                     {
-                        cmdText = $"{tranResult.PreScript}SELECT {outputFormatedField} FROM {PostgreSqlFactory.WrapKeyword(objectName)} AS {translator.ObjectPetName} {joinScript} {(string.IsNullOrWhiteSpace(tranResult.ConditionString) ? string.Empty : $"WHERE {tranResult.ConditionString}")} {orderString} {(size > 0 ? $"LIMIT {size} OFFSET 0" : string.Empty)}";
+                        cmdText = $"{tranResult.PreScript}SELECT {outputFormatedField} FROM {PostgreSqlManager.WrapKeyword(objectName)} AS {translator.ObjectPetName} {joinScript} {(string.IsNullOrWhiteSpace(tranResult.ConditionString) ? string.Empty : $"WHERE {tranResult.ConditionString}")} {sortString} {(size > 0 ? $"LIMIT {size} OFFSET 0" : string.Empty)}";
                     }
                     else
                     {
-                        string innerFormatedField = string.Join(",", PostgreSqlFactory.FormatQueryFields(translator.ObjectPetName, queryFields, false));
-                        cmdText = $"{tranResult.PreScript}SELECT {outputFormatedField} FROM (SELECT {innerFormatedField} FROM {PostgreSqlFactory.WrapKeyword(objectName)} AS {translator.ObjectPetName} {joinScript} {(string.IsNullOrWhiteSpace(tranResult.ConditionString) ? string.Empty : $"WHERE {tranResult.ConditionString}")} {tranResult.CombineScript}) AS {translator.ObjectPetName} {orderString} {(size > 0 ? $"LIMIT {size} OFFSET 0" : string.Empty)}";
+                        string innerFormatedField = string.Join(",", PostgreSqlManager.FormatQueryFields(translator.ObjectPetName, queryFields, false));
+                        cmdText = $"{tranResult.PreScript}SELECT {outputFormatedField} FROM (SELECT {innerFormatedField} FROM {PostgreSqlManager.WrapKeyword(objectName)} AS {translator.ObjectPetName} {joinScript} {(string.IsNullOrWhiteSpace(tranResult.ConditionString) ? string.Empty : $"WHERE {tranResult.ConditionString}")} {tranResult.CombineScript}) AS {translator.ObjectPetName} {sortString} {(size > 0 ? $"LIMIT {size} OFFSET 0" : string.Empty)}";
                     }
                     break;
             }
@@ -507,40 +520,40 @@ namespace EZNEW.Data.PostgreSQL
 
             #region parameter
 
-            var parameters = PostgreSqlFactory.ConvertCmdParameters(PostgreSqlFactory.ParseParameters(tranResult.Parameters));
+            var parameters = PostgreSqlManager.ConvertCmdParameters(PostgreSqlManager.ConvertParameter(tranResult.Parameters));
 
             #endregion
 
             //Trace log
-            PostgreSqlFactory.LogScript(cmdText, tranResult.Parameters);
+            PostgreSqlManager.LogScript(cmdText, tranResult.Parameters);
 
-            using (var conn = PostgreSqlFactory.GetConnection(server))
+            using (var conn = PostgreSqlManager.GetConnection(server))
             {
-                var tran = PostgreSqlFactory.GetQueryTransaction(conn, command.Query);
-                var cmdDefinition = new CommandDefinition(cmdText, parameters, transaction: tran, commandType: PostgreSqlFactory.GetCommandType(command as DefaultCommand), cancellationToken: command.Query?.GetCancellationToken() ?? default);
+                var tran = PostgreSqlManager.GetQueryTransaction(conn, command.Query);
+                var cmdDefinition = new CommandDefinition(cmdText, parameters, transaction: tran, commandType: PostgreSqlManager.GetCommandType(command as DefaultCommand), cancellationToken: command.Query?.GetCancellationToken() ?? default);
                 return await conn.QueryAsync<T>(cmdDefinition).ConfigureAwait(false);
             }
         }
 
         /// <summary>
-        /// Query data paging
+        /// Query paging data
         /// </summary>
         /// <typeparam name="T">Data type</typeparam>
         /// <param name="server">Databse server</param>
         /// <param name="command">Command</param>
-        /// <returns>Return data paging</returns>
+        /// <returns>Return paging data</returns>
         public IEnumerable<T> QueryPaging<T>(DatabaseServer server, ICommand command)
         {
             return QueryPagingAsync<T>(server, command).Result;
         }
 
         /// <summary>
-        /// Query data paging
+        /// Query paging data
         /// </summary>
         /// <typeparam name="T">Data type</typeparam>
         /// <param name="server">Databse server</param>
         /// <param name="command">Command</param>
-        /// <returns>Return data paging</returns>
+        /// <returns>Return paging data</returns>
         public async Task<IEnumerable<T>> QueryPagingAsync<T>(DatabaseServer server, ICommand command)
         {
             int beginIndex = 0;
@@ -581,12 +594,12 @@ namespace EZNEW.Data.PostgreSQL
         {
             if (command.Query == null)
             {
-                throw new EZNEWException("ICommand.Query is null");
+                throw new EZNEWException($"{nameof(ICommand.Query)} is null");
             }
 
-            #region query translate
+            #region query translation
 
-            IQueryTranslator translator = PostgreSqlFactory.GetQueryTranslator(server);
+            IQueryTranslator translator = PostgreSqlManager.GetQueryTranslator(DataAccessContext.Create(server, command));
             var tranResult = translator.Translate(command.Query);
 
             #endregion
@@ -595,21 +608,21 @@ namespace EZNEW.Data.PostgreSQL
 
             string joinScript = tranResult.AllowJoin ? tranResult.JoinScript : string.Empty;
             string cmdText;
-            switch (command.Query.QueryType)
+            switch (command.Query.ExecutionMode)
             {
-                case QueryCommandType.Text:
+                case QueryExecutionMode.Text:
                     cmdText = tranResult.ConditionString;
                     break;
-                case QueryCommandType.QueryObject:
+                case QueryExecutionMode.QueryObject:
                 default:
                     string limitString = $"LIMIT {size} OFFSET {offsetNum}";
-                    string objectName = DataManager.GetEntityObjectName(DatabaseServerType.PostgreSQL, command.EntityType, command.ObjectName);
-                    string defaultFieldName = PostgreSqlFactory.GetDefaultFieldName(command.EntityType);
-                    var queryFields = PostgreSqlFactory.GetQueryFields(command.Query, command.EntityType, true);
-                    string innerFormatedField = string.Join(",", PostgreSqlFactory.FormatQueryFields(translator.ObjectPetName, queryFields, false));
-                    string outputFormatedField = string.Join(",", PostgreSqlFactory.FormatQueryFields(translator.ObjectPetName, queryFields, true));
-                    string queryScript = $"SELECT {innerFormatedField} FROM {PostgreSqlFactory.WrapKeyword(objectName)} AS {translator.ObjectPetName} {joinScript} {(string.IsNullOrWhiteSpace(tranResult.ConditionString) ? string.Empty : $"WHERE {tranResult.ConditionString}")} {tranResult.CombineScript}";
-                    cmdText = $"{(string.IsNullOrWhiteSpace(tranResult.PreScript) ? $"WITH {PostgreSqlFactory.PagingTableName} AS ({queryScript})" : $"{tranResult.PreScript},{PostgreSqlFactory.PagingTableName} AS ({queryScript})")}SELECT (SELECT COUNT({PostgreSqlFactory.WrapKeyword(defaultFieldName)}) FROM {PostgreSqlFactory.PagingTableName}) AS {DataManager.PagingTotalCountFieldName},{outputFormatedField} FROM {PostgreSqlFactory.PagingTableName} AS {translator.ObjectPetName} ORDER BY {(string.IsNullOrWhiteSpace(tranResult.OrderString) ? $"{translator.ObjectPetName}.{PostgreSqlFactory.WrapKeyword(defaultFieldName)} DESC" : $"{tranResult.OrderString}")} {limitString}";
+                    string objectName = translator.DataAccessContext.GetCommandEntityObjectName(command);
+                    string defaultFieldName = PostgreSqlManager.GetDefaultFieldName(command.EntityType);
+                    var queryFields = PostgreSqlManager.GetQueryFields(command.Query, command.EntityType, true);
+                    string innerFormatedField = string.Join(",", PostgreSqlManager.FormatQueryFields(translator.ObjectPetName, queryFields, false));
+                    string outputFormatedField = string.Join(",", PostgreSqlManager.FormatQueryFields(translator.ObjectPetName, queryFields, true));
+                    string queryScript = $"SELECT {innerFormatedField} FROM {PostgreSqlManager.WrapKeyword(objectName)} AS {translator.ObjectPetName} {joinScript} {(string.IsNullOrWhiteSpace(tranResult.ConditionString) ? string.Empty : $"WHERE {tranResult.ConditionString}")} {tranResult.CombineScript}";
+                    cmdText = $"{(string.IsNullOrWhiteSpace(tranResult.PreScript) ? $"WITH {PostgreSqlManager.PagingTableName} AS ({queryScript})" : $"{tranResult.PreScript},{PostgreSqlManager.PagingTableName} AS ({queryScript})")}SELECT (SELECT COUNT({PostgreSqlManager.WrapKeyword(defaultFieldName)}) FROM {PostgreSqlManager.PagingTableName}) AS {DataManager.PagingTotalCountFieldName},{outputFormatedField} FROM {PostgreSqlManager.PagingTableName} AS {translator.ObjectPetName} ORDER BY {(string.IsNullOrWhiteSpace(tranResult.SortString) ? $"{translator.ObjectPetName}.{PostgreSqlManager.WrapKeyword(defaultFieldName)} DESC" : $"{tranResult.SortString}")} {limitString}";
                     break;
             }
 
@@ -617,17 +630,17 @@ namespace EZNEW.Data.PostgreSQL
 
             #region parameter
 
-            var parameters = PostgreSqlFactory.ConvertCmdParameters(PostgreSqlFactory.ParseParameters(tranResult.Parameters));
+            var parameters = PostgreSqlManager.ConvertCmdParameters(PostgreSqlManager.ConvertParameter(tranResult.Parameters));
 
             #endregion
 
             //Trace log
-            PostgreSqlFactory.LogScript(cmdText, tranResult.Parameters);
+            PostgreSqlManager.LogScript(cmdText, tranResult.Parameters);
 
-            using (var conn = PostgreSqlFactory.GetConnection(server))
+            using (var conn = PostgreSqlManager.GetConnection(server))
             {
-                var tran = PostgreSqlFactory.GetQueryTransaction(conn, command.Query);
-                var cmdDefinition = new CommandDefinition(cmdText, parameters, transaction: tran, commandType: PostgreSqlFactory.GetCommandType(command as DefaultCommand), cancellationToken: command.Query?.GetCancellationToken() ?? default);
+                var tran = PostgreSqlManager.GetQueryTransaction(conn, command.Query);
+                var cmdDefinition = new CommandDefinition(cmdText, parameters, transaction: tran, commandType: PostgreSqlManager.GetCommandType(command as DefaultCommand), cancellationToken: command.Query?.GetCancellationToken() ?? default);
                 return await conn.QueryAsync<T>(cmdDefinition).ConfigureAwait(false);
             }
         }
@@ -638,9 +651,9 @@ namespace EZNEW.Data.PostgreSQL
         /// <param name="server">Database server</param>
         /// <param name="command">Command</param>
         /// <returns>Return whether data has existed</returns>
-        public bool Query(DatabaseServer server, ICommand command)
+        public bool Exists(DatabaseServer server, ICommand command)
         {
-            return QueryAsync(server, command).Result;
+            return ExistsAsync(server, command).Result;
         }
 
         /// <summary>
@@ -649,12 +662,11 @@ namespace EZNEW.Data.PostgreSQL
         /// <param name="server">Database server</param>
         /// <param name="command">Command</param>
         /// <returns>Return whether data has existed</returns>
-        public async Task<bool> QueryAsync(DatabaseServer server, ICommand command)
+        public async Task<bool> ExistsAsync(DatabaseServer server, ICommand command)
         {
-            var translator = PostgreSqlFactory.GetQueryTranslator(server);
+            #region query translation
 
-            #region query translate
-
+            var translator = PostgreSqlManager.GetQueryTranslator(DataAccessContext.Create(server, command));
             command.Query.ClearQueryFields();
             var queryFields = EntityManager.GetPrimaryKeys(command.EntityType).ToArray();
             if (queryFields.IsNullOrEmpty())
@@ -671,23 +683,23 @@ namespace EZNEW.Data.PostgreSQL
 
             #region script
 
-            string objectName = DataManager.GetEntityObjectName(DatabaseServerType.PostgreSQL, command.EntityType, command.ObjectName);
-            string cmdText = $"{preScript}SELECT EXISTS(SELECT {string.Join(",", PostgreSqlFactory.FormatQueryFields(translator.ObjectPetName, command.Query, command.EntityType, true, false))} FROM {PostgreSqlFactory.WrapKeyword(objectName)} AS {translator.ObjectPetName} {joinScript} {conditionString} {tranResult.CombineScript})";
+            string objectName = translator.DataAccessContext.GetCommandEntityObjectName(command);
+            string cmdText = $"{preScript}SELECT EXISTS(SELECT {string.Join(",", PostgreSqlManager.FormatQueryFields(translator.ObjectPetName, command.Query, command.EntityType, true, false))} FROM {PostgreSqlManager.WrapKeyword(objectName)} AS {translator.ObjectPetName} {joinScript} {conditionString} {tranResult.CombineScript})";
 
             #endregion
 
             #region parameter
 
-            var parameters = PostgreSqlFactory.ConvertCmdParameters(PostgreSqlFactory.ParseParameters(tranResult.Parameters));
+            var parameters = PostgreSqlManager.ConvertCmdParameters(PostgreSqlManager.ConvertParameter(tranResult.Parameters));
 
             #endregion
 
             //Trace log
-            PostgreSqlFactory.LogScript(cmdText, tranResult.Parameters);
+            PostgreSqlManager.LogScript(cmdText, tranResult.Parameters);
 
-            using (var conn = PostgreSqlFactory.GetConnection(server))
+            using (var conn = PostgreSqlManager.GetConnection(server))
             {
-                var tran = PostgreSqlFactory.GetQueryTransaction(conn, command.Query);
+                var tran = PostgreSqlManager.GetQueryTransaction(conn, command.Query);
                 var cmdDefinition = new CommandDefinition(cmdText, parameters, transaction: tran, cancellationToken: command.Query?.GetCancellationToken() ?? default);
                 int value = await conn.ExecuteScalarAsync<int>(cmdDefinition).ConfigureAwait(false);
                 return value > 0;
@@ -695,79 +707,79 @@ namespace EZNEW.Data.PostgreSQL
         }
 
         /// <summary>
-        /// Query single value
+        /// Query aggregation value
         /// </summary>
         /// <typeparam name="T">Data type</typeparam>
         /// <param name="server">Database server</param>
         /// <param name="command">Command</param>
-        /// <returns>Return the data</returns>
+        /// <returns>Return aggregation value</returns>
         public T AggregateValue<T>(DatabaseServer server, ICommand command)
         {
             return AggregateValueAsync<T>(server, command).Result;
         }
 
         /// <summary>
-        /// Query single value
+        /// Query aggregation value
         /// </summary>
         /// <typeparam name="T">Data type</typeparam>
         /// <param name="server">Database server</param>
         /// <param name="command">Command</param>
-        /// <returns>Return the data</returns>
+        /// <returns>Return aggregation value</returns>
         public async Task<T> AggregateValueAsync<T>(DatabaseServer server, ICommand command)
         {
             if (command.Query == null)
             {
-                throw new EZNEWException("ICommand.Query is null");
+                throw new EZNEWException($"{nameof(ICommand.Query)} is null");
             }
 
-            #region query translate
+            #region query translation
 
-            bool queryObject = command.Query.QueryType == QueryCommandType.QueryObject;
-            string funcName = PostgreSqlFactory.GetAggregateFunctionName(command.OperateType);
+            bool queryObject = command.Query.ExecutionMode == QueryExecutionMode.QueryObject;
+            string funcName = PostgreSqlManager.GetAggregateFunctionName(command.OperationType);
             EntityField defaultField = null;
             if (queryObject)
             {
                 if (string.IsNullOrWhiteSpace(funcName))
                 {
-                    throw new NotSupportedException($"Not support {command.OperateType}");
+                    throw new NotSupportedException($"Not support {command.OperationType}");
                 }
-                if (PostgreSqlFactory.AggregateOperateMustNeedField(command.OperateType))
+                if (PostgreSqlManager.AggregateOperateMustNeedField(command.OperationType))
                 {
                     if (command.Query.QueryFields.IsNullOrEmpty())
                     {
                         throw new EZNEWException($"You must specify the field to perform for the {funcName} operation");
                     }
-                    defaultField = DataManager.GetField(DatabaseServerType.PostgreSQL, command.EntityType, command.Query.QueryFields.First());
+                    defaultField = DataManager.GetField(CurrentDatabaseServerType, command.EntityType, command.Query.QueryFields.First());
                 }
                 else
                 {
-                    defaultField = DataManager.GetDefaultField(DatabaseServerType.PostgreSQL, command.EntityType);
+                    defaultField = DataManager.GetDefaultField(CurrentDatabaseServerType, command.EntityType);
                 }
                 //combine fields
-                if (!command.Query.CombineItems.IsNullOrEmpty())
+                if (!command.Query.Combines.IsNullOrEmpty())
                 {
                     var combineKeys = EntityManager.GetPrimaryKeys(command.EntityType).Union(new string[1] { defaultField.PropertyName }).ToArray();
                     command.Query.ClearQueryFields();
-                    foreach (var combineItem in command.Query.CombineItems)
+                    foreach (var combineItem in command.Query.Combines)
                     {
-                        combineItem.CombineQuery.ClearQueryFields();
+                        combineItem.Query.ClearQueryFields();
                         if (combineKeys.IsNullOrEmpty())
                         {
-                            combineItem.CombineQuery.ClearNotQueryFields();
+                            combineItem.Query.ClearNotQueryFields();
                             command.Query.ClearNotQueryFields();
                         }
                         else
                         {
                             command.Query.AddQueryFields(combineKeys);
-                            if (combineItem.CombineType == CombineType.Union || combineItem.CombineType == CombineType.UnionAll)
+                            if (combineItem.Type == CombineType.Union || combineItem.Type == CombineType.UnionAll)
                             {
-                                combineItem.CombineQuery.AddQueryFields(combineKeys);
+                                combineItem.Query.AddQueryFields(combineKeys);
                             }
                         }
                     }
                 }
             }
-            IQueryTranslator translator = PostgreSqlFactory.GetQueryTranslator(server);
+            IQueryTranslator translator = PostgreSqlManager.GetQueryTranslator(DataAccessContext.Create(server, command));
             var tranResult = translator.Translate(command.Query);
 
             #endregion
@@ -776,17 +788,17 @@ namespace EZNEW.Data.PostgreSQL
 
             string cmdText;
             string joinScript = tranResult.AllowJoin ? tranResult.JoinScript : string.Empty;
-            switch (command.Query.QueryType)
+            switch (command.Query.ExecutionMode)
             {
-                case QueryCommandType.Text:
+                case QueryExecutionMode.Text:
                     cmdText = tranResult.ConditionString;
                     break;
-                case QueryCommandType.QueryObject:
+                case QueryExecutionMode.QueryObject:
                 default:
-                    string objectName = DataManager.GetEntityObjectName(DatabaseServerType.PostgreSQL, command.EntityType, command.ObjectName);
+                    string objectName = translator.DataAccessContext.GetCommandEntityObjectName(command);
                     cmdText = string.IsNullOrWhiteSpace(tranResult.CombineScript)
-                        ? $"{tranResult.PreScript}SELECT {funcName}({PostgreSqlFactory.FormatField(translator.ObjectPetName, defaultField, false)}) FROM {PostgreSqlFactory.WrapKeyword(objectName)} AS {translator.ObjectPetName} {joinScript} {(string.IsNullOrWhiteSpace(tranResult.ConditionString) ? string.Empty : $"WHERE {tranResult.ConditionString}")}"
-                        : $"{tranResult.PreScript}SELECT {funcName}({PostgreSqlFactory.FormatField(translator.ObjectPetName, defaultField, false)}) FROM (SELECT {string.Join(",", PostgreSqlFactory.FormatQueryFields(translator.ObjectPetName, command.Query, command.EntityType, true, false))} FROM {PostgreSqlFactory.WrapKeyword(objectName)} AS {translator.ObjectPetName} {joinScript} {(string.IsNullOrWhiteSpace(tranResult.ConditionString) ? string.Empty : $"WHERE {tranResult.ConditionString}")} {tranResult.CombineScript}) AS {translator.ObjectPetName}";
+                        ? $"{tranResult.PreScript}SELECT {funcName}({PostgreSqlManager.FormatField(translator.ObjectPetName, defaultField, false)}) FROM {PostgreSqlManager.WrapKeyword(objectName)} AS {translator.ObjectPetName} {joinScript} {(string.IsNullOrWhiteSpace(tranResult.ConditionString) ? string.Empty : $"WHERE {tranResult.ConditionString}")}"
+                        : $"{tranResult.PreScript}SELECT {funcName}({PostgreSqlManager.FormatField(translator.ObjectPetName, defaultField, false)}) FROM (SELECT {string.Join(",", PostgreSqlManager.FormatQueryFields(translator.ObjectPetName, command.Query, command.EntityType, true, false))} FROM {PostgreSqlManager.WrapKeyword(objectName)} AS {translator.ObjectPetName} {joinScript} {(string.IsNullOrWhiteSpace(tranResult.ConditionString) ? string.Empty : $"WHERE {tranResult.ConditionString}")} {tranResult.CombineScript}) AS {translator.ObjectPetName}";
                     break;
             }
 
@@ -794,23 +806,23 @@ namespace EZNEW.Data.PostgreSQL
 
             #region parameter
 
-            var parameters = PostgreSqlFactory.ConvertCmdParameters(PostgreSqlFactory.ParseParameters(tranResult.Parameters));
+            var parameters = PostgreSqlManager.ConvertCmdParameters(PostgreSqlManager.ConvertParameter(tranResult.Parameters));
 
             #endregion
 
             //Trace log
-            PostgreSqlFactory.LogScript(cmdText, tranResult.Parameters);
+            PostgreSqlManager.LogScript(cmdText, tranResult.Parameters);
 
-            using (var conn = PostgreSqlFactory.GetConnection(server))
+            using (var conn = PostgreSqlManager.GetConnection(server))
             {
-                var tran = PostgreSqlFactory.GetQueryTransaction(conn, command.Query);
-                var cmdDefinition = new CommandDefinition(cmdText, parameters, transaction: tran, commandType: PostgreSqlFactory.GetCommandType(command as DefaultCommand), cancellationToken: command.Query?.GetCancellationToken() ?? default);
+                var tran = PostgreSqlManager.GetQueryTransaction(conn, command.Query);
+                var cmdDefinition = new CommandDefinition(cmdText, parameters, transaction: tran, commandType: PostgreSqlManager.GetCommandType(command as DefaultCommand), cancellationToken: command.Query?.GetCancellationToken() ?? default);
                 return await conn.ExecuteScalarAsync<T>(cmdDefinition).ConfigureAwait(false);
             }
         }
 
         /// <summary>
-        /// Query data
+        /// Query data set
         /// </summary>
         /// <param name="server">Database server</param>
         /// <param name="command">Command</param>
@@ -818,12 +830,12 @@ namespace EZNEW.Data.PostgreSQL
         public async Task<DataSet> QueryMultipleAsync(DatabaseServer server, ICommand command)
         {
             //Trace log
-            PostgreSqlFactory.LogScript(command.CommandText, command.Parameters);
-            using (var conn = PostgreSqlFactory.GetConnection(server))
+            PostgreSqlManager.LogScript(command.Text, command.Parameters);
+            using (var conn = PostgreSqlManager.GetConnection(server))
             {
-                var tran = PostgreSqlFactory.GetQueryTransaction(conn, command.Query);
-                DynamicParameters parameters = PostgreSqlFactory.ConvertCmdParameters(PostgreSqlFactory.ParseParameters(command.Parameters));
-                var cmdDefinition = new CommandDefinition(command.CommandText, parameters, transaction: tran, commandType: PostgreSqlFactory.GetCommandType(command as DefaultCommand), cancellationToken: command.Query?.GetCancellationToken() ?? default);
+                var tran = PostgreSqlManager.GetQueryTransaction(conn, command.Query);
+                DynamicParameters parameters = PostgreSqlManager.ConvertCmdParameters(PostgreSqlManager.ConvertParameter(command.Parameters));
+                var cmdDefinition = new CommandDefinition(command.Text, parameters, transaction: tran, commandType: PostgreSqlManager.GetCommandType(command as DefaultCommand), cancellationToken: command.Query?.GetCancellationToken() ?? default);
                 using (var reader = await conn.ExecuteReaderAsync(cmdDefinition).ConfigureAwait(false))
                 {
                     DataSet dataSet = new DataSet();
@@ -848,7 +860,7 @@ namespace EZNEW.Data.PostgreSQL
         /// <param name="server">Database server</param>
         /// <param name="dataTable">Data table</param>
         /// <param name="bulkInsertOptions">Insert options</param>
-        public void BulkInsert(DatabaseServer server, DataTable dataTable, IBulkInsertOptions bulkInsertOptions = null)
+        public void BulkInsert(DatabaseServer server, DataTable dataTable, IBulkInsertionOptions bulkInsertOptions = null)
         {
             BulkInsertAsync(server, dataTable).Wait();
         }
@@ -859,7 +871,7 @@ namespace EZNEW.Data.PostgreSQL
         /// <param name="server">Database server</param>
         /// <param name="dataTable">Data table</param>
         /// <param name="bulkInsertOptions">Insert options</param>
-        public async Task BulkInsertAsync(DatabaseServer server, DataTable dataTable, IBulkInsertOptions bulkInsertOptions = null)
+        public async Task BulkInsertAsync(DatabaseServer server, DataTable dataTable, IBulkInsertionOptions bulkInsertOptions = null)
         {
             if (server == null)
             {
@@ -869,8 +881,8 @@ namespace EZNEW.Data.PostgreSQL
             {
                 throw new ArgumentNullException(nameof(dataTable));
             }
-            PostgreSQLBulkInsertOptions postgreSqlBulkInsertOptions = bulkInsertOptions as PostgreSQLBulkInsertOptions;
-            postgreSqlBulkInsertOptions = postgreSqlBulkInsertOptions ?? new PostgreSQLBulkInsertOptions();
+            PostgreSqlBulkInsertionOptions postgreSqlBulkInsertOptions = bulkInsertOptions as PostgreSqlBulkInsertionOptions;
+            postgreSqlBulkInsertOptions = postgreSqlBulkInsertOptions ?? new PostgreSqlBulkInsertionOptions();
             List<string> columnNames = new List<string>(dataTable.Columns.Count);
             foreach (DataColumn col in dataTable.Columns)
             {
@@ -880,8 +892,8 @@ namespace EZNEW.Data.PostgreSQL
             var fields = columnNames;
             if (postgreSqlBulkInsertOptions.WrapWithQuotes)
             {
-                tableName = PostgreSqlFactory.WrapKeyword(tableName);
-                fields = fields.Select(c => PostgreSqlFactory.WrapKeyword(c)).ToList();
+                tableName = PostgreSqlManager.WrapKeyword(tableName);
+                fields = fields.Select(c => PostgreSqlManager.WrapKeyword(c)).ToList();
             }
             string copyString = $"COPY {tableName} ({string.Join(",", fields)}) FROM STDIN BINARY";
             using (var conn = new NpgsqlConnection(server?.ConnectionString))

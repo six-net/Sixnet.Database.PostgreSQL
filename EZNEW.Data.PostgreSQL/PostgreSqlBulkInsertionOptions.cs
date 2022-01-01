@@ -4,10 +4,13 @@ using System.Text;
 
 namespace EZNEW.Data.PostgreSQL
 {
-    public class PostgreSQLBulkInsertOptions : IBulkInsertOptions
+    /// <summary>
+    /// Defines postgresql bulk insertion options
+    /// </summary>
+    public class PostgreSqlBulkInsertionOptions : IBulkInsertionOptions
     {
         /// <summary>
-        ///  Whether wrap field and table name with quotes
+        ///  Indicates whether wrap field and table name with quotes
         ///  Default is true
         /// </summary>
         public bool WrapWithQuotes { get; set; } = true;
