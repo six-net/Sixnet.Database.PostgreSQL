@@ -1,8 +1,6 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Text;
+﻿using Sixnet.Development.Data.Database;
 
-namespace EZNEW.Data.PostgreSQL
+namespace Sixnet.Database.PostgreSQL
 {
     /// <summary>
     /// Defines postgresql bulk insertion options
