@@ -14,7 +14,7 @@ namespace Sixnet.Database.PostgreSQL
     /// <summary>
     /// Imeplements database provider for the PostgreSQL
     /// </summary>
-    public class PostgreSqlProvider : BaseDatabaseProvider
+    public class PostgreSqlProvider : BaseSixnetDatabaseProvider
     {
         #region Constructor
 
@@ -32,7 +32,7 @@ namespace Sixnet.Database.PostgreSQL
         /// </summary>
         /// <param name="server">Database server</param>
         /// <returns></returns>
-        public override IDbConnection GetDbConnection(DatabaseServer server)
+        public override IDbConnection GetDbConnection(SixnetDatabaseServer server)
         {
             return PostgreSqlManager.GetConnection(server);
         }
@@ -45,7 +45,7 @@ namespace Sixnet.Database.PostgreSQL
         /// Get data command resolver
         /// </summary>
         /// <returns></returns>
-        protected override IDataCommandResolver GetDataCommandResolver()
+        protected override ISixnetDataCommandResolver GetDataCommandResolver()
         {
             return PostgreSqlManager.GetCommandResolver();
         }
@@ -73,7 +73,7 @@ namespace Sixnet.Database.PostgreSQL
         /// </summary>
         /// <param name="command">Database multiple command</param>
         /// <returns>Added data identities,Key: command id, Value: identity value</returns>
-        public override Dictionary<string, TIdentity> InsertAndReturnIdentity<TIdentity>(DatabaseMultipleCommand command)
+        public override Dictionary<string, TIdentity> InsertAndReturnIdentity<TIdentity>(MultipleDatabaseCommand command)
         {
             var dataCommandResolver = GetDataCommandResolver() as PostgreSqlDataCommandResolver;
             var statements = dataCommandResolver.GenerateDatabaseExecutionStatements(command);
@@ -102,7 +102,7 @@ namespace Sixnet.Database.PostgreSQL
         /// </summary>
         /// <param name="command">Database multiple command</param>
         /// <returns>Added data identities,Key: command id, Value: identity value</returns>
-        public override async Task<Dictionary<string, TIdentity>> InsertAndReturnIdentityAsync<TIdentity>(DatabaseMultipleCommand command)
+        public override async Task<Dictionary<string, TIdentity>> InsertAndReturnIdentityAsync<TIdentity>(MultipleDatabaseCommand command)
         {
             var dataCommandResolver = GetDataCommandResolver() as PostgreSqlDataCommandResolver;
             var statements = dataCommandResolver.GenerateDatabaseExecutionStatements(command);
@@ -136,12 +136,12 @@ namespace Sixnet.Database.PostgreSQL
         /// <param name="server">Database server</param>
         /// <param name="dataTable">Data table</param>
         /// <param name="bulkInsertOptions">Insert options</param>
-        public override async Task BulkInsertAsync(DatabaseBulkInsertCommand command)
+        public override async Task BulkInsertAsync(BulkInsertDatabaseCommand command)
         {
             var server = command?.Connection?.DatabaseServer;
-            ThrowHelper.ThrowArgNullIf(server == null, nameof(DatabaseBulkInsertCommand.Connection.DatabaseServer));
+            SixnetDirectThrower.ThrowArgNullIf(server == null, nameof(BulkInsertDatabaseCommand.Connection.DatabaseServer));
             var dataTable = command.DataTable;
-            ThrowHelper.ThrowArgNullIf(dataTable == null, nameof(DatabaseBulkInsertCommand.DataTable));
+            SixnetDirectThrower.ThrowArgNullIf(dataTable == null, nameof(BulkInsertDatabaseCommand.DataTable));
 
             var postgreSqlBulkInsertOptions = command.BulkInsertionOptions as PostgreSqlBulkInsertionOptions;
             postgreSqlBulkInsertOptions ??= new PostgreSqlBulkInsertionOptions();
@@ -196,12 +196,12 @@ namespace Sixnet.Database.PostgreSQL
         /// <param name="server">Database server</param>
         /// <param name="dataTable">Data table</param>
         /// <param name="bulkInsertOptions">Insert options</param>
-        public override void BulkInsert(DatabaseBulkInsertCommand command)
+        public override void BulkInsert(BulkInsertDatabaseCommand command)
         {
             var server = command?.Connection?.DatabaseServer;
-            ThrowHelper.ThrowArgNullIf(server == null, nameof(DatabaseBulkInsertCommand.Connection.DatabaseServer));
+            SixnetDirectThrower.ThrowArgNullIf(server == null, nameof(BulkInsertDatabaseCommand.Connection.DatabaseServer));
             var dataTable = command.DataTable;
-            ThrowHelper.ThrowArgNullIf(dataTable == null, nameof(DatabaseBulkInsertCommand.DataTable));
+            SixnetDirectThrower.ThrowArgNullIf(dataTable == null, nameof(BulkInsertDatabaseCommand.DataTable));
 
             var postgreSqlBulkInsertOptions = command.BulkInsertionOptions as PostgreSqlBulkInsertionOptions;
             postgreSqlBulkInsertOptions ??= new PostgreSqlBulkInsertionOptions();

@@ -5,7 +5,7 @@ namespace Sixnet.Database.PostgreSQL
     /// <summary>
     /// Defines postgresql bulk insertion options
     /// </summary>
-    public class PostgreSqlBulkInsertionOptions : IBulkInsertionOptions
+    public class PostgreSqlBulkInsertionOptions : ISixnetBulkInsertionOptions
     {
         /// <summary>
         ///  Indicates whether wrap field and table name with quotes

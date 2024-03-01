@@ -8,11 +8,11 @@ namespace Sixnet.Database.PostgreSQL
     /// <summary>
     /// Default field formatter for postgresql
     /// </summary>
-    public class PostgreSqlDefaultFieldFormatter : IFieldFormatter
+    public class PostgreSqlDefaultFieldFormatter : ISixnetFieldFormatter
     {
-        public string Format(FieldFormatContext context)
+        public string Format(FormatFieldContext context)
         {
-            var formatOption = context.FormatOption;
+            var formatOption = context.FormatSetting;
             var formatedFieldName = context.FieldName;
             formatedFieldName = formatOption.Name switch
             {
