@@ -14,7 +14,7 @@ namespace Sixnet.Database.PostgreSQL
     /// <summary>
     /// Imeplements database provider for the PostgreSQL
     /// </summary>
-    public class PostgreSqlProvider : BaseSixnetDatabaseProvider
+    public class PostgreSqlProvider : BaseDatabaseProvider
     {
         #region Constructor
 
@@ -32,7 +32,7 @@ namespace Sixnet.Database.PostgreSQL
         /// </summary>
         /// <param name="server">Database server</param>
         /// <returns></returns>
-        public override IDbConnection GetDbConnection(SixnetDatabaseServer server)
+        public override IDbConnection GetDbConnection(DatabaseServer server)
         {
             return PostgreSqlManager.GetConnection(server);
         }
