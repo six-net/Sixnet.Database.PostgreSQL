@@ -18,8 +18,18 @@ namespace Sixnet.Database.PostgreSQL
     {
         #region Constructor
 
-        public PostgreSqlProvider()
+        public PostgreSqlProvider(Action<PostgreSqlOptions> configure = null)
         {
+            var postgreSqlOptions = new PostgreSqlOptions();
+            configure?.Invoke(postgreSqlOptions);
+            if(postgreSqlOptions.EnableLegacyTimestampBehavior)
+            {
+                AppContext.SetSwitch("Npgsql.EnableLegacyTimestampBehavior", true);
+            }
+            if(postgreSqlOptions.DisableDateTimeInfinityConversions)
+            {
+                AppContext.SetSwitch("Npgsql.DisableDateTimeInfinityConversions", true);
+            }
             queryDatabaseTablesScript = "SELECT TABLE_NAME AS \"TableName\" FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE';";
         }
 
