@@ -14,12 +14,22 @@ namespace Sixnet.Database.PostgreSQL
     /// <summary>
     /// Imeplements database provider for the PostgreSQL
     /// </summary>
-    public class PostgreSqlProvider : BaseSixnetDatabaseProvider
+    public class PostgreSqlProvider : BaseDatabaseProvider
     {
         #region Constructor
 
-        public PostgreSqlProvider()
+        public PostgreSqlProvider(Action<PostgreSqlOptions> configure = null)
         {
+            var postgreSqlOptions = new PostgreSqlOptions();
+            configure?.Invoke(postgreSqlOptions);
+            if (postgreSqlOptions.EnableLegacyTimestampBehavior)
+            {
+                AppContext.SetSwitch("Npgsql.EnableLegacyTimestampBehavior", true);
+            }
+            if (postgreSqlOptions.DisableDateTimeInfinityConversions)
+            {
+                AppContext.SetSwitch("Npgsql.DisableDateTimeInfinityConversions", true);
+            }
             queryDatabaseTablesScript = "SELECT TABLE_NAME AS \"TableName\" FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE';";
         }
 
@@ -32,7 +42,7 @@ namespace Sixnet.Database.PostgreSQL
         /// </summary>
         /// <param name="server">Database server</param>
         /// <returns></returns>
-        public override IDbConnection GetDbConnection(SixnetDatabaseServer server)
+        public override IDbConnection GetDbConnection(DatabaseServer server)
         {
             return PostgreSqlManager.GetConnection(server);
         }
@@ -75,26 +85,33 @@ namespace Sixnet.Database.PostgreSQL
         /// <returns>Added data identities,Key: command id, Value: identity value</returns>
         public override Dictionary<string, TIdentity> InsertAndReturnIdentity<TIdentity>(MultipleDatabaseCommand command)
         {
-            var dataCommandResolver = GetDataCommandResolver() as PostgreSqlDataCommandResolver;
-            var statements = dataCommandResolver.GenerateDatabaseExecutionStatements(command);
-            var identityDict = new Dictionary<string, TIdentity>();
-            var dbConnection = command.Connection.DbConnection;
-            foreach (var statement in statements)
+            try
             {
-                var commandDefinition = GetCommandDefinition(command, statement);
-                dbConnection.Execute(commandDefinition);
-                if (commandDefinition.Parameters is DynamicParameters commandParameters && statement.Parameters != null)
+                var dataCommandResolver = GetDataCommandResolver() as PostgreSqlDataCommandResolver;
+                var statements = dataCommandResolver.GenerateDatabaseExecutionStatements(command);
+                var identityDict = new Dictionary<string, TIdentity>();
+                var dbConnection = command.Connection.DbConnection;
+                foreach (var statement in statements)
                 {
-                    foreach (var parItem in statement.Parameters.Items)
+                    var commandDefinition = GetCommandDefinition(command, statement);
+                    dbConnection.Execute(commandDefinition);
+                    if (commandDefinition.Parameters is DynamicParameters commandParameters && statement.Parameters != null)
                     {
-                        if (parItem.Value.ParameterDirection == ParameterDirection.Output)
+                        foreach (var parItem in statement.Parameters.Items)
                         {
-                            identityDict[parItem.Key] = commandParameters.Get<TIdentity>(parItem.Key);
+                            if (parItem.Value.ParameterDirection == ParameterDirection.Output)
+                            {
+                                identityDict[parItem.Key] = commandParameters.Get<TIdentity>(parItem.Key);
+                            }
                         }
                     }
                 }
+                return identityDict;
             }
-            return identityDict;
+            catch (Exception ex)
+            {
+                throw GetSqlException(ex);
+            }
         }
 
         /// <summary>
@@ -104,26 +121,33 @@ namespace Sixnet.Database.PostgreSQL
         /// <returns>Added data identities,Key: command id, Value: identity value</returns>
         public override async Task<Dictionary<string, TIdentity>> InsertAndReturnIdentityAsync<TIdentity>(MultipleDatabaseCommand command)
         {
-            var dataCommandResolver = GetDataCommandResolver() as PostgreSqlDataCommandResolver;
-            var statements = dataCommandResolver.GenerateDatabaseExecutionStatements(command);
-            var identityDict = new Dictionary<string, TIdentity>();
-            var dbConnection = command.Connection.DbConnection;
-            foreach (var statement in statements)
+            try
             {
-                var commandDefinition = GetCommandDefinition(command, statement);
-                await dbConnection.ExecuteAsync(commandDefinition).ConfigureAwait(false);
-                if (commandDefinition.Parameters is DynamicParameters commandParameters && statement.Parameters != null)
+                var dataCommandResolver = GetDataCommandResolver() as PostgreSqlDataCommandResolver;
+                var statements = dataCommandResolver.GenerateDatabaseExecutionStatements(command);
+                var identityDict = new Dictionary<string, TIdentity>();
+                var dbConnection = command.Connection.DbConnection;
+                foreach (var statement in statements)
                 {
-                    foreach (var parItem in statement.Parameters.Items)
+                    var commandDefinition = GetCommandDefinition(command, statement);
+                    await dbConnection.ExecuteAsync(commandDefinition).ConfigureAwait(false);
+                    if (commandDefinition.Parameters is DynamicParameters commandParameters && statement.Parameters != null)
                     {
-                        if (parItem.Value.ParameterDirection == ParameterDirection.Output)
+                        foreach (var parItem in statement.Parameters.Items)
                         {
-                            identityDict[parItem.Key.LSplit(dataCommandResolver.ParameterPrefix)[0]] = commandParameters.Get<TIdentity>(parItem.Key);
+                            if (parItem.Value.ParameterDirection == ParameterDirection.Output)
+                            {
+                                identityDict[parItem.Key.LSplit(dataCommandResolver.ParameterPrefix)[0]] = commandParameters.Get<TIdentity>(parItem.Key);
+                            }
                         }
                     }
                 }
+                return identityDict;
             }
-            return identityDict;
+            catch (Exception ex)
+            {
+                throw GetSqlException(ex);
+            }
         }
 
         #endregion
@@ -138,55 +162,43 @@ namespace Sixnet.Database.PostgreSQL
         /// <param name="bulkInsertOptions">Insert options</param>
         public override async Task BulkInsertAsync(BulkInsertDatabaseCommand command)
         {
-            var server = command?.Connection?.DatabaseServer;
-            SixnetDirectThrower.ThrowArgNullIf(server == null, nameof(BulkInsertDatabaseCommand.Connection.DatabaseServer));
-            var dataTable = command.DataTable;
-            SixnetDirectThrower.ThrowArgNullIf(dataTable == null, nameof(BulkInsertDatabaseCommand.DataTable));
+            try
+            {
+                var conn = command.Connection.DbConnection as NpgsqlConnection;
+                var dataTable = command.DataTable;
+                SixnetDirectThrower.ThrowArgNullIf(dataTable == null, nameof(BulkInsertDatabaseCommand.DataTable));
+                var postgreSqlBulkInsertOptions = command.BulkInsertionOptions as PostgreSqlBulkInsertionOptions;
+                postgreSqlBulkInsertOptions ??= new PostgreSqlBulkInsertionOptions();
+                var columnNames = new List<string>(dataTable.Columns.Count);
+                foreach (DataColumn col in dataTable.Columns)
+                {
+                    columnNames.Add(col.ColumnName);
+                }
+                var tableName = dataTable.TableName;
+                var fields = columnNames;
+                if (postgreSqlBulkInsertOptions.WrapWithQuotes)
+                {
+                    tableName = PostgreSqlManager.WrapKeyword(tableName);
+                    fields = fields.Select(c => PostgreSqlManager.WrapKeyword(c)).ToList();
+                }
+                var copyString = $"COPY {tableName} ({string.Join(",", fields)}) FROM STDIN BINARY";
 
-            var postgreSqlBulkInsertOptions = command.BulkInsertionOptions as PostgreSqlBulkInsertionOptions;
-            postgreSqlBulkInsertOptions ??= new PostgreSqlBulkInsertionOptions();
-            var columnNames = new List<string>(dataTable.Columns.Count);
-            foreach (DataColumn col in dataTable.Columns)
-            {
-                columnNames.Add(col.ColumnName);
-            }
-            var tableName = dataTable.TableName;
-            var fields = columnNames;
-            if (postgreSqlBulkInsertOptions.WrapWithQuotes)
-            {
-                tableName = PostgreSqlManager.WrapKeyword(tableName);
-                fields = fields.Select(c => PostgreSqlManager.WrapKeyword(c)).ToList();
-            }
-            var copyString = $"COPY {tableName} ({string.Join(",", fields)}) FROM STDIN BINARY";
-            using (var conn = new NpgsqlConnection(server?.ConnectionString))
-            {
-                try
+                using (var writer = conn.BeginBinaryImport(copyString))
                 {
-                    conn.Open();
-                    using (var writer = conn.BeginBinaryImport(copyString))
+                    foreach (DataRow row in dataTable.Rows)
                     {
-                        foreach (DataRow row in dataTable.Rows)
+                        writer.StartRow();
+                        foreach (var col in columnNames)
                         {
-                            writer.StartRow();
-                            foreach (var col in columnNames)
-                            {
-                                await writer.WriteAsync(row[col]).ConfigureAwait(false);
-                            }
+                            await writer.WriteAsync(row[col]).ConfigureAwait(false);
                         }
-                        await writer.CompleteAsync().ConfigureAwait(false);
                     }
+                    await writer.CompleteAsync().ConfigureAwait(false);
                 }
-                catch (Exception ex)
-                {
-                    throw ex;
-                }
-                finally
-                {
-                    if (conn != null && conn.State != ConnectionState.Closed)
-                    {
-                        conn.Close();
-                    }
-                }
+            }
+            catch (Exception ex)
+            {
+                throw GetSqlException(ex);
             }
         }
 
@@ -198,56 +210,62 @@ namespace Sixnet.Database.PostgreSQL
         /// <param name="bulkInsertOptions">Insert options</param>
         public override void BulkInsert(BulkInsertDatabaseCommand command)
         {
-            var server = command?.Connection?.DatabaseServer;
-            SixnetDirectThrower.ThrowArgNullIf(server == null, nameof(BulkInsertDatabaseCommand.Connection.DatabaseServer));
-            var dataTable = command.DataTable;
-            SixnetDirectThrower.ThrowArgNullIf(dataTable == null, nameof(BulkInsertDatabaseCommand.DataTable));
+            try
+            {
+                var conn = command.Connection.DbConnection as NpgsqlConnection;
+                var dataTable = command.DataTable;
+                SixnetDirectThrower.ThrowArgNullIf(dataTable == null, nameof(BulkInsertDatabaseCommand.DataTable));
 
-            var postgreSqlBulkInsertOptions = command.BulkInsertionOptions as PostgreSqlBulkInsertionOptions;
-            postgreSqlBulkInsertOptions ??= new PostgreSqlBulkInsertionOptions();
-            var columnNames = new List<string>(dataTable.Columns.Count);
-            foreach (DataColumn col in dataTable.Columns)
-            {
-                columnNames.Add(col.ColumnName);
-            }
-            var tableName = dataTable.TableName;
-            var fields = columnNames;
-            if (postgreSqlBulkInsertOptions.WrapWithQuotes)
-            {
-                tableName = PostgreSqlManager.WrapKeyword(tableName);
-                fields = fields.Select(c => PostgreSqlManager.WrapKeyword(c)).ToList();
-            }
-            var copyString = $"COPY {tableName} ({string.Join(",", fields)}) FROM STDIN BINARY";
-            using (var conn = new NpgsqlConnection(server?.ConnectionString))
-            {
-                try
+                var postgreSqlBulkInsertOptions = command.BulkInsertionOptions as PostgreSqlBulkInsertionOptions;
+                postgreSqlBulkInsertOptions ??= new PostgreSqlBulkInsertionOptions();
+                var columnNames = new List<string>(dataTable.Columns.Count);
+                foreach (DataColumn col in dataTable.Columns)
                 {
-                    conn.Open();
-                    using (var writer = conn.BeginBinaryImport(copyString))
+                    columnNames.Add(col.ColumnName);
+                }
+                var tableName = dataTable.TableName;
+                var fields = columnNames;
+                if (postgreSqlBulkInsertOptions.WrapWithQuotes)
+                {
+                    tableName = PostgreSqlManager.WrapKeyword(tableName);
+                    fields = fields.Select(c => PostgreSqlManager.WrapKeyword(c)).ToList();
+                }
+                var copyString = $"COPY {tableName} ({string.Join(",", fields)}) FROM STDIN BINARY";
+
+                using (var writer = conn.BeginBinaryImport(copyString))
+                {
+                    foreach (DataRow row in dataTable.Rows)
                     {
-                        foreach (DataRow row in dataTable.Rows)
+                        writer.StartRow();
+                        foreach (var col in columnNames)
                         {
-                            writer.StartRow();
-                            foreach (var col in columnNames)
-                            {
-                                writer.Write(row[col]);
-                            }
+                            writer.Write(row[col]);
                         }
-                        writer.Complete();
                     }
-                }
-                catch (Exception ex)
-                {
-                    throw ex;
-                }
-                finally
-                {
-                    if (conn != null && conn.State != ConnectionState.Closed)
-                    {
-                        conn.Close();
-                    }
+                    writer.Complete();
                 }
             }
+            catch (Exception ex)
+            {
+                throw GetSqlException(ex);
+            }
+        }
+
+        #endregion
+
+        #region Get exception
+
+        protected override Exception GetSqlException(Exception ex)
+        {
+            if (ex is NpgsqlException sqlException)
+            {
+                switch (sqlException.ErrorCode)
+                {
+                    case 23505:
+                        return new SixnetSqlAlreadExistsException(sqlException.Message, sqlException);
+                }
+            }
+            return ex;
         }
 
         #endregion
