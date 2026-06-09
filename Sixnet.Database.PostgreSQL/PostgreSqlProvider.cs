@@ -3,7 +3,10 @@ using System.Collections.Generic;
 using System.Data;
 using System.Linq;
 using System.Threading.Tasks;
+
 using Npgsql;
+
+using Sixnet.Development.Data;
 using Sixnet.Development.Data.Command;
 using Sixnet.Development.Data.Dapper;
 using Sixnet.Development.Data.Database;
@@ -14,7 +17,7 @@ namespace Sixnet.Database.PostgreSQL
     /// <summary>
     /// Imeplements database provider for the PostgreSQL
     /// </summary>
-    public class PostgreSqlProvider : BaseDatabaseProvider
+    public class PostgreSqlProvider : SixnetBaseDatabaseProvider
     {
         #region Constructor
 
@@ -30,7 +33,7 @@ namespace Sixnet.Database.PostgreSQL
             {
                 AppContext.SetSwitch("Npgsql.DisableDateTimeInfinityConversions", true);
             }
-            queryDatabaseTablesScript = "SELECT TABLE_NAME AS \"TableName\" FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE';";
+            queryTablesScript = "SELECT TABLE_NAME AS \"TableName\" FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE';";
         }
 
         #endregion
@@ -42,9 +45,26 @@ namespace Sixnet.Database.PostgreSQL
         /// </summary>
         /// <param name="server">Database server</param>
         /// <returns></returns>
-        public override IDbConnection GetDbConnection(DatabaseServer server)
+        public override IDbConnection GetDbConnection(SixnetDatabaseServer server)
         {
             return PostgreSqlManager.GetConnection(server);
+        }
+
+        /// <summary>
+        /// Get db connection meta
+        /// </summary>
+        /// <param name="connection"></param>
+        /// <returns></returns>
+        public override SixnetDatabaseConnectionMeta GetDbConnectionMeta(IDbConnection connection)
+        {
+            var sqlBuilder = new NpgsqlConnectionStringBuilder(connection.ConnectionString);
+            return new SixnetDatabaseConnectionMeta()
+            {
+                UserName = sqlBuilder.Username,
+                Password = sqlBuilder.Password,
+                DataSource = sqlBuilder.Host,
+                DatabaseName = sqlBuilder.Database,
+            };
         }
 
         #endregion
@@ -69,9 +89,9 @@ namespace Sixnet.Database.PostgreSQL
         /// </summary>
         /// <param name="parameters">Data command parameters</param>
         /// <returns></returns>
-        protected override DynamicParameters ConvertDataCommandParameters(DataCommandParameters parameters)
+        protected override DynamicParameters ConvertDataCommandParameters(SixnetDataCommandParameters parameters)
         {
-            return parameters?.ConvertToDynamicParameters(PostgreSqlManager.CurrentDatabaseServerType);
+            return parameters?.ConvertToDynamicParameters(PostgreSqlManager.GetCommandResolver().DatabaseType);
         }
 
         #endregion
@@ -83,7 +103,7 @@ namespace Sixnet.Database.PostgreSQL
         /// </summary>
         /// <param name="command">Database multiple command</param>
         /// <returns>Added data identities,Key: command id, Value: identity value</returns>
-        public override Dictionary<string, TIdentity> InsertAndReturnIdentity<TIdentity>(MultipleDatabaseCommand command)
+        public override Dictionary<string, TIdentity> InsertAndReturnIdentity<TIdentity>(SixnetMultipleDatabaseCommand command)
         {
             try
             {
@@ -119,7 +139,7 @@ namespace Sixnet.Database.PostgreSQL
         /// </summary>
         /// <param name="command">Database multiple command</param>
         /// <returns>Added data identities,Key: command id, Value: identity value</returns>
-        public override async Task<Dictionary<string, TIdentity>> InsertAndReturnIdentityAsync<TIdentity>(MultipleDatabaseCommand command)
+        public override async Task<Dictionary<string, TIdentity>> InsertAndReturnIdentityAsync<TIdentity>(SixnetMultipleDatabaseCommand command)
         {
             try
             {
@@ -160,13 +180,13 @@ namespace Sixnet.Database.PostgreSQL
         /// <param name="server">Database server</param>
         /// <param name="dataTable">Data table</param>
         /// <param name="bulkInsertOptions">Insert options</param>
-        public override async Task BulkInsertAsync(BulkInsertDatabaseCommand command)
+        public override async Task BulkInsertAsync(SixnetBulkInsertDatabaseCommand command)
         {
             try
             {
                 var conn = command.Connection.DbConnection as NpgsqlConnection;
                 var dataTable = command.DataTable;
-                SixnetDirectThrower.ThrowArgNullIf(dataTable == null, nameof(BulkInsertDatabaseCommand.DataTable));
+                SixnetDirectThrower.ThrowArgNullIf(dataTable == null, nameof(SixnetBulkInsertDatabaseCommand.DataTable));
                 var postgreSqlBulkInsertOptions = command.BulkInsertionOptions as PostgreSqlBulkInsertionOptions;
                 postgreSqlBulkInsertOptions ??= new PostgreSqlBulkInsertionOptions();
                 var columnNames = new List<string>(dataTable.Columns.Count);
@@ -176,10 +196,16 @@ namespace Sixnet.Database.PostgreSQL
                 }
                 var tableName = dataTable.TableName;
                 var fields = columnNames;
+                var postgresqlResolver = PostgreSqlManager.GetCommandResolver();
                 if (postgreSqlBulkInsertOptions.WrapWithQuotes)
                 {
-                    tableName = PostgreSqlManager.WrapKeyword(tableName);
-                    fields = fields.Select(c => PostgreSqlManager.WrapKeyword(c)).ToList();
+                    tableName = postgresqlResolver.FormatAndWrapObjectName(SixnetDatabaseObjectName.Create(tableName, SixnetDatabaseObjectType.Table));
+                    fields = fields.Select(c => postgresqlResolver.FormatAndWrapObjectName(SixnetDatabaseObjectName.Create(tableName, SixnetDatabaseObjectType.Column))).ToList();
+                }
+                else
+                {
+                    tableName = postgresqlResolver.GetObjectFullName(postgresqlResolver.FormatObjectName(SixnetDatabaseObjectName.Create(tableName, SixnetDatabaseObjectType.Table)));
+                    fields = fields.Select(c => postgresqlResolver.GetObjectFullName(postgresqlResolver.FormatObjectName(SixnetDatabaseObjectName.Create(tableName, SixnetDatabaseObjectType.Column)))).ToList();
                 }
                 var copyString = $"COPY {tableName} ({string.Join(",", fields)}) FROM STDIN BINARY";
 
@@ -208,13 +234,13 @@ namespace Sixnet.Database.PostgreSQL
         /// <param name="server">Database server</param>
         /// <param name="dataTable">Data table</param>
         /// <param name="bulkInsertOptions">Insert options</param>
-        public override void BulkInsert(BulkInsertDatabaseCommand command)
+        public override void BulkInsert(SixnetBulkInsertDatabaseCommand command)
         {
             try
             {
                 var conn = command.Connection.DbConnection as NpgsqlConnection;
                 var dataTable = command.DataTable;
-                SixnetDirectThrower.ThrowArgNullIf(dataTable == null, nameof(BulkInsertDatabaseCommand.DataTable));
+                SixnetDirectThrower.ThrowArgNullIf(dataTable == null, nameof(SixnetBulkInsertDatabaseCommand.DataTable));
 
                 var postgreSqlBulkInsertOptions = command.BulkInsertionOptions as PostgreSqlBulkInsertionOptions;
                 postgreSqlBulkInsertOptions ??= new PostgreSqlBulkInsertionOptions();
@@ -225,10 +251,16 @@ namespace Sixnet.Database.PostgreSQL
                 }
                 var tableName = dataTable.TableName;
                 var fields = columnNames;
+                var postgresqlResolver = PostgreSqlManager.GetCommandResolver();
                 if (postgreSqlBulkInsertOptions.WrapWithQuotes)
                 {
-                    tableName = PostgreSqlManager.WrapKeyword(tableName);
-                    fields = fields.Select(c => PostgreSqlManager.WrapKeyword(c)).ToList();
+                    tableName = postgresqlResolver.FormatAndWrapObjectName(SixnetDatabaseObjectName.Create(tableName, SixnetDatabaseObjectType.Table));
+                    fields = fields.Select(c => postgresqlResolver.FormatAndWrapObjectName(SixnetDatabaseObjectName.Create(tableName, SixnetDatabaseObjectType.Column))).ToList();
+                }
+                else
+                {
+                    tableName = postgresqlResolver.GetObjectFullName(postgresqlResolver.FormatObjectName(SixnetDatabaseObjectName.Create(tableName, SixnetDatabaseObjectType.Table)));
+                    fields = fields.Select(c => postgresqlResolver.GetObjectFullName(postgresqlResolver.FormatObjectName(SixnetDatabaseObjectName.Create(tableName, SixnetDatabaseObjectType.Column)))).ToList();
                 }
                 var copyString = $"COPY {tableName} ({string.Join(",", fields)}) FROM STDIN BINARY";
 

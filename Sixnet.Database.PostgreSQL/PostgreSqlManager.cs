@@ -13,21 +13,6 @@ namespace Sixnet.Database.PostgreSQL
         #region Fields
 
         /// <summary>
-        /// Gets current database server type
-        /// </summary>
-        internal const DatabaseType CurrentDatabaseServerType = DatabaseType.PostgreSQL;
-
-        /// <summary>
-        /// Key word prefix
-        /// </summary>
-        internal const string KeywordPrefix = "\"";
-
-        /// <summary>
-        /// Key word suffix
-        /// </summary>
-        internal const string KeywordSuffix = "\"";
-
-        /// <summary>
         /// Default query translator
         /// </summary>
         static readonly PostgreSqlDataCommandResolver DefaultResolver = new PostgreSqlDataCommandResolver();
@@ -41,9 +26,9 @@ namespace Sixnet.Database.PostgreSQL
         /// </summary>
         /// <param name="server">Database server</param>
         /// <returns>Return database connection</returns>
-        public static IDbConnection GetConnection(DatabaseServer server)
+        public static IDbConnection GetConnection(SixnetDatabaseServer server)
         {
-            return SixnetDataManager.GetDatabaseConnection(server) ?? new NpgsqlConnection(server.ConnectionString);
+            return SixnetDataManager.GetDatabaseConnection(server) ?? new NpgsqlConnection(SixnetDataManager.ResolveConnectionString(server));
         }
 
         #endregion
@@ -57,20 +42,6 @@ namespace Sixnet.Database.PostgreSQL
         internal static PostgreSqlDataCommandResolver GetCommandResolver()
         {
             return DefaultResolver;
-        }
-
-        #endregion
-
-        #region Wrap keyword
-
-        /// <summary>
-        /// Wrap keyword by the KeywordPrefix and the KeywordSuffix
-        /// </summary>
-        /// <param name="originalValue">Original value</param>
-        /// <returns></returns>
-        internal static string WrapKeyword(string originalValue)
-        {
-            return $"{KeywordPrefix}{originalValue}{KeywordSuffix}";
         }
 
         #endregion
