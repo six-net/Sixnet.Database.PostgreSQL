@@ -8,14 +8,14 @@ namespace Sixnet.Database.PostgreSQL
     /// <summary>
     /// Database postgresql manager
     /// </summary>
-    internal static class PostgreSqlManager
+    internal static class SixnetPostgreSqlManager
     {
         #region Fields
 
         /// <summary>
         /// Default query translator
         /// </summary>
-        static readonly PostgreSqlDataCommandResolver DefaultResolver = new PostgreSqlDataCommandResolver();
+        static readonly SixnetPostgreSqlDataCommandResolver DefaultResolver = new SixnetPostgreSqlDataCommandResolver();
 
         #endregion
 
@@ -39,7 +39,7 @@ namespace Sixnet.Database.PostgreSQL
         /// Get command resolver
         /// </summary>
         /// <returns>Return a command resolver</returns>
-        internal static PostgreSqlDataCommandResolver GetCommandResolver()
+        internal static SixnetPostgreSqlDataCommandResolver GetCommandResolver()
         {
             return DefaultResolver;
         }

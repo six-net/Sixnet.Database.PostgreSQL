@@ -6,7 +6,7 @@ namespace Sixnet.Database.PostgreSQL
     /// <summary>
     /// Defines postgresql bulk insertion options
     /// </summary>
-    public class PostgreSqlBulkInsertionOptions : ISixnetBulkInsertionOptions
+    public class SixnetPostgreSqlBulkInsertionOptions : ISixnetBulkInsertionOptions
     {
         /// <summary>
         /// Gets or sets the data operation options

@@ -4,7 +4,7 @@ using System.Text;
 
 namespace Sixnet.Database.PostgreSQL
 {
-    public class PostgreSqlOptions
+    public class SixnetPostgreSqlOptions
     {
         /// <summary>
         /// Whether enable legacy timestamp behavior

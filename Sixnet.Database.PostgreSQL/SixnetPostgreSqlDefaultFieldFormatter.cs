@@ -11,7 +11,7 @@ namespace Sixnet.Database.PostgreSQL
     /// <summary>
     /// Default field formatter for postgresql
     /// </summary>
-    public class PostgreSqlDefaultFieldFormatter : ISixnetFieldFormatter
+    public class SixnetPostgreSqlDefaultFieldFormatter : ISixnetFieldFormatter
     {
         static List<StringComparison> StringIgnoreCaseValues = new List<StringComparison>()
         {
@@ -129,6 +129,8 @@ namespace Sixnet.Database.PostgreSQL
                 SixnetFieldFormatterNames.STRING_INDEX_OF_ANY => StringIndexOfAny(formatedFieldName, formatOption.Parameter),
                 SixnetFieldFormatterNames.STRING_LAST_INDEX_OF => StringLastIndexOf(formatedFieldName, formatOption.Parameter),
                 SixnetFieldFormatterNames.STRING_LAST_INDEX_OF_ANY => StringLastIndexOfAny(formatedFieldName, formatOption.Parameter),
+                SixnetFieldFormatterNames.EXISTS => $"EXISTS{formatedFieldName}",
+                SixnetFieldFormatterNames.NOT_EXISTS => $"NOT EXISTS{formatedFieldName}",
                 _ => throw new SixnetException($"{context.Server.DatabaseType} does not support field formatter: {formatOption.Name}"),
             };
             return formatedFieldName;
