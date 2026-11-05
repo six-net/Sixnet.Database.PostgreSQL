@@ -506,7 +506,7 @@ BEGIN
           AND NOT attisdropped
     ) THEN
         ALTER TABLE {formattedTableName}
-        ADD COLUMN {WrapObjectName(dataFieldName).Name} {GetFieldDefinition(field, command.MigrationInfo)};
+        ADD COLUMN {WrapObjectName(dataFieldName).Name} {GetFieldDefinition(table, field, command.MigrationInfo)};
     END IF;
 END $$;
 ");
